@@ -27,7 +27,13 @@ urlpatterns = [
     path('admin/', admin.site.urls),
 
     # Application APIs
-    path('api/auth/', include('auth.urls')),
+    path('api/lab/', include('lab.urls')),
+    path('api/auth/', include('users.urls')),
+    path('api/farmer/', include('farmer.urls')),
+    path('api/factory/', include('factory.urls')),
+    path('api/product/', include('product.urls')),
+    path('api/collector/', include('collector.urls')),
+    path('api/organization/', include('organization.urls')),
 
     # OpenAPI Schema
     path(
