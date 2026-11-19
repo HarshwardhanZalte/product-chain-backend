@@ -201,6 +201,10 @@ paths:
       responses:
         '200':
           description: No response body
+        '400':
+          description: No response body
+        '429':
+          description: No response body
   /api/auth/reset-password/:
     post:
       operationId: auth_reset_password_create

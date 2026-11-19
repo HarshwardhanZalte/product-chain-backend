@@ -318,7 +318,7 @@ class Command(BaseCommand):
         EmailOTP.objects.create(
             user=users['farmer'],
             purpose='VERIFY_EMAIL',
-            otp_hash=EmailOTP.hash_otp('123456'),
+            otp_hash=EmailOTP.hash_otp('098765'),
             expires_at=now + timedelta(minutes=10),
             attempts=0,
             resend_available_at=now,

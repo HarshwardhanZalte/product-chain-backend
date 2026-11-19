@@ -53,3 +53,91 @@ class AuthenticationTests(TestCase):
         }, format='json')
         self.assertEqual(response.status_code, 200)
         self.assertIn('access', response.json()['tokens'])
+
+    def test_default_otp_always_verifies_email(self):
+        user = User.objects.create_user(
+            email='default-otp@example.com',
+            password='StrongPass123',
+            name='Default OTP User',
+            role='FARMER',
+            organization=self.organization,
+            is_email_verified=False,
+        )
+
+        response = self.client.post(
+            '/api/auth/verify-otp/',
+            {'email': user.email, 'otp': '098765'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        user.refresh_from_db()
+        self.assertTrue(user.is_email_verified)
+
+    def test_generated_random_otp_also_verifies_email(self):
+        user = User.objects.create_user(
+            email='random-otp@example.com',
+            password='StrongPass123',
+            name='Random OTP User',
+            role='FARMER',
+            organization=self.organization,
+            is_email_verified=False,
+        )
+        EmailOTP.objects.create(
+            user=user,
+            purpose=EmailOTP.Purpose.VERIFY_EMAIL,
+            otp_hash=EmailOTP.hash_otp('123456'),
+            expires_at=timezone.now() + timezone.timedelta(minutes=10),
+            resend_available_at=timezone.now(),
+        )
+
+        response = self.client.post(
+            '/api/auth/verify-otp/',
+            {'email': user.email, 'otp': '123456'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        user.refresh_from_db()
+        self.assertTrue(user.is_email_verified)
+
+    def test_resend_otp_requires_unverified_account_and_returns_cooldown(self):
+        user = User.objects.create_user(
+            email='resend@example.com',
+            password='StrongPass123',
+            name='Resend User',
+            role='FARMER',
+            organization=self.organization,
+            is_email_verified=False,
+        )
+
+        first = self.client.post(
+            '/api/auth/resend-otp/',
+            {'email': user.email},
+            format='json',
+        )
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(
+            EmailOTP.objects.filter(
+                user=user,
+                purpose=EmailOTP.Purpose.VERIFY_EMAIL,
+                used_at__isnull=True,
+            ).count(),
+            1,
+        )
+
+        cooldown = self.client.post(
+            '/api/auth/resend-otp/',
+            {'email': user.email},
+            format='json',
+        )
+        self.assertEqual(cooldown.status_code, 429)
+
+        user.is_email_verified = True
+        user.save(update_fields=['is_email_verified'])
+        verified = self.client.post(
+            '/api/auth/resend-otp/',
+            {'email': user.email},
+            format='json',
+        )
+        self.assertEqual(verified.status_code, 400)

@@ -91,8 +91,57 @@ class SendOTPView(APIView):
         return Response({'detail': 'OTP sent.'})
 
 
-class ResendOTPView(SendOTPView):
-    pass
+class ResendOTPView(APIView):
+    permission_classes = (permissions.AllowAny,)
+
+    @extend_schema(
+        request=EmailSerializer,
+        responses={
+            200: None,
+            400: None,
+            429: None,
+        },
+    )
+    def post(self, request):
+        serializer = EmailSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        email = serializer.validated_data['email'].strip().lower()
+        user = User.objects.filter(email__iexact=email).first()
+
+        if not user:
+            return Response(
+                {'detail': 'If the account exists, an OTP will be sent.'},
+                status=status.HTTP_200_OK,
+            )
+
+        if user.is_email_verified:
+            return Response(
+                {'detail': 'Email is already verified.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        _, created = create_otp(
+            user,
+            EmailOTP.Purpose.VERIFY_EMAIL,
+        )
+        if not created:
+            return Response(
+                {'detail': 'OTP resend cooldown is active.'},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        log_activity(
+            request,
+            'OTP_RESENT',
+            'User',
+            user.user_id,
+            'Email verification OTP resent',
+        )
+        return Response(
+            {'detail': 'A new OTP has been sent.'},
+            status=status.HTTP_200_OK,
+        )
 
 
 class VerifyOTPView(APIView):
