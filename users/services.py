@@ -7,7 +7,7 @@ from django.utils import timezone
 from .models import EmailOTP
 
 
-DEFAULT_OTP = '098765'
+DEFAULT_OTP = '666666'
 
 
 def log_activity(user, action, entity_type, entity_id, description='', ip_address=None):
