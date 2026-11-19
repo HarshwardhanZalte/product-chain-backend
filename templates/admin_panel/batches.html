@@ -1,0 +1,5 @@
+{% extends "admin_panel/base.html" %}{% block content %}<h1 class="h3">Herb Batches</h1>
+<form class="row g-2 mb-3"><div class="col"><input class="form-control" name="q" value="{{ request.GET.q }}" placeholder="Batch ID or herb"></div><div class="col-auto"><button class="btn btn-primary">Search</button></div></form>
+<table class="table table-striped bg-white"><thead><tr><th>Batch ID</th><th>Herb</th><th>Farmer</th><th>Status</th><th></th></tr></thead><tbody>
+{% for item in page_obj %}<tr><td>{{ item.batch_id }}</td><td>{{ item.herb_name }}</td><td>{{ item.farmer.farmer_name }}</td><td><span class="badge bg-info">{{ item.status }}</span></td><td><a href="{% url 'admin_batch_detail' item.batch_id %}" class="btn btn-sm btn-outline-primary">Details</a></td></tr>{% endfor %}
+</tbody></table>{% include "admin_panel/pagination.html" %}{% endblock %}

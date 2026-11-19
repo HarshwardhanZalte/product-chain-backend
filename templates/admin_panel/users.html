@@ -1,0 +1,7 @@
+{% extends "admin_panel/base.html" %}{% block content %}
+<h1 class="h3">Users</h1>
+<form class="row g-2 mb-3"><div class="col"><input class="form-control" name="q" value="{{ request.GET.q }}" placeholder="Search users"></div><div class="col-auto"><button class="btn btn-primary">Search</button></div></form>
+<table class="table table-striped bg-white"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Verified</th><th>Active</th><th>Action</th></tr></thead><tbody>
+{% for item in page_obj %}<tr><td>{{ item.name }}</td><td>{{ item.email }}</td><td>{{ item.role }}</td><td>{{ item.is_email_verified|yesno:"Yes,No" }}</td><td>{{ item.is_active|yesno:"Yes,No" }}</td><td><form method="post">{% csrf_token %}<input type="hidden" name="user_id" value="{{ item.pk }}"><select name="role">{% for value,label in roles %}<option value="{{ value }}" {% if item.role == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select><button class="btn btn-sm btn-outline-primary" name="is_active" value="{% if item.is_active %}false{% else %}true{% endif %}">{% if item.is_active %}Deactivate{% else %}Activate{% endif %}</button></form></td></tr>{% endfor %}
+</tbody></table>{% include "admin_panel/pagination.html" %}
+{% endblock %}

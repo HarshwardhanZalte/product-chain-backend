@@ -1,0 +1,12 @@
+{% extends "admin_panel/base.html" %}{% block title %}Admin Dashboard{% endblock %}{% block content %}
+<h1 class="h3 mb-4">Dashboard</h1>
+<div class="row g-3">
+{% for label,value in dashboard_stats %}
+<div class="col-md-3"><div class="card"><div class="card-body"><small>{{ label }}</small><h3>{{ value }}</h3></div></div></div>
+{% endfor %}
+</div>
+<div class="card mt-4"><div class="card-header">Recent activity</div><div class="table-responsive"><table class="table mb-0">
+<thead><tr><th>Time</th><th>User</th><th>Action</th><th>Description</th></tr></thead>
+<tbody>{% for item in recent_activities %}<tr><td>{{ item.created_at }}</td><td>{{ item.user.email|default:"System" }}</td><td>{{ item.action }}</td><td>{{ item.description }}</td></tr>{% empty %}<tr><td colspan="4">No activity.</td></tr>{% endfor %}</tbody>
+</table></div></div>
+{% endblock %}

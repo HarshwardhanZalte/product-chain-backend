@@ -16,6 +16,8 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
+from django.conf import settings
+from django.conf.urls.static import static
 
 from drf_spectacular.views import (
     SpectacularAPIView,
@@ -25,15 +27,23 @@ from drf_spectacular.views import (
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('panel/', include('admin_panel.urls')),
 
     # Application APIs
     path('api/lab/', include('lab.urls')),
+    path('api/labs/', include('lab.urls')),
     path('api/auth/', include('users.urls')),
     path('api/farmer/', include('farmer.urls')),
+    path('api/farmers/', include('farmer.urls')),
     path('api/factory/', include('factory.urls')),
+    path('api/factories/', include('factory.urls')),
     path('api/product/', include('product.urls')),
+    path('api/products/', include('product.urls')),
     path('api/collector/', include('collector.urls')),
+    path('api/collectors/', include('collector.urls')),
     path('api/organization/', include('organization.urls')),
+    path('api/organizations/', include('organization.urls')),
+    path('api/batches/', include('farmer.urls')),
 
     # OpenAPI Schema
     path(
@@ -60,3 +70,6 @@ urlpatterns = [
         name='redoc'
     ),
 ]
+
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

@@ -1,0 +1,4 @@
+{% extends "admin_panel/base.html" %}{% block content %}<h1 class="h3">{{ product.product_name }}</h1>
+<dl class="row bg-white p-3"><dt class="col-sm-3">Batch number</dt><dd class="col-sm-9">{{ product.batch_number }}</dd><dt class="col-sm-3">Manufacturer</dt><dd class="col-sm-9">{{ product.manufacturer.factory_name }}</dd><dt class="col-sm-3">Status</dt><dd class="col-sm-9">{{ product.status }}</dd><dt class="col-sm-3">QR reference</dt><dd class="col-sm-9">{{ product.qr_reference }}</dd></dl>
+<h2 class="h5">Input herb batches</h2><ul>{% for item in product.input_batches.all %}<li>{{ item.herb_batch.batch_id }} - {{ item.quantity_used }} {{ item.unit }}</li>{% empty %}<li>No input batches.</li>{% endfor %}</ul>
+{% if product.qr_code_image %}<img src="{{ product.qr_code_image.url }}" class="img-thumbnail" style="max-width:240px">{% endif %}{% endblock %}

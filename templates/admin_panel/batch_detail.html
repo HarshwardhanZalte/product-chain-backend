@@ -1,0 +1,4 @@
+{% extends "admin_panel/base.html" %}{% block content %}<h1 class="h3">Batch {{ batch.batch_id }}</h1>
+<div class="card mb-3"><div class="card-body"><dl class="row"><dt class="col-sm-3">Herb</dt><dd class="col-sm-9">{{ batch.herb_name }}</dd><dt class="col-sm-3">Botanical name</dt><dd class="col-sm-9">{{ batch.botanical_name }}</dd><dt class="col-sm-3">Quantity</dt><dd class="col-sm-9">{{ batch.quantity }} {{ batch.unit }}</dd><dt class="col-sm-3">Status</dt><dd class="col-sm-9">{{ batch.status }}</dd><dt class="col-sm-3">Blockchain record</dt><dd class="col-sm-9">{{ batch.blockchain_record_id|default:"Not recorded" }}</dd></dl></div></div>
+<h2 class="h5">Transfers</h2><ul>{% for item in transfers %}<li>{{ item.event_id }} - {{ item.status }}</li>{% empty %}<li>No transfers.</li>{% endfor %}</ul>
+<h2 class="h5">Laboratory tests</h2><ul>{% for item in tests %}<li>{{ item.test_id }} - {{ item.status }}</li>{% empty %}<li>No tests.</li>{% endfor %}</ul>{% endblock %}

@@ -1,0 +1,4 @@
+{% extends "admin_panel/base.html" %}{% block content %}<h1 class="h3">Laboratory Tests</h1>
+<table class="table table-striped bg-white"><thead><tr><th>Test ID</th><th>Batch</th><th>Laboratory</th><th>Status</th><th>Certificate</th></tr></thead><tbody>
+{% for item in page_obj %}<tr><td>{{ item.test_id }}</td><td>{{ item.batch.batch_id }}</td><td>{{ item.laboratory.laboratory_name }}</td><td>{{ item.status }}</td><td>{% if item.certificate_file %}<a href="{{ item.certificate_file.url }}">View</a>{% else %}-{% endif %}</td></tr>{% endfor %}
+</tbody></table>{% include "admin_panel/pagination.html" %}{% endblock %}

@@ -1,0 +1,2 @@
+{% extends "admin_panel/base.html" %}{% block content %}<h1 class="h3">Activity and Audit Logs</h1>
+<table class="table table-striped bg-white"><thead><tr><th>Time</th><th>User</th><th>Action</th><th>Entity</th><th>Description</th></tr></thead><tbody>{% for item in page_obj %}<tr><td>{{ item.created_at }}</td><td>{{ item.user.email|default:"System" }}</td><td>{{ item.action }}</td><td>{{ item.entity_type }} {{ item.entity_id }}</td><td>{{ item.description }}</td></tr>{% endfor %}</tbody></table>{% include "admin_panel/pagination.html" %}{% endblock %}
