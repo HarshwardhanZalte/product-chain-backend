@@ -3,6 +3,7 @@ from datetime import date
 from django.db import transaction
 from rest_framework import filters, generics, permissions, status
 from rest_framework.exceptions import NotFound
+from drf_spectacular.utils import OpenApiTypes, extend_schema
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -52,6 +53,7 @@ class FarmerProfileView(generics.RetrieveUpdateAPIView):
 class FarmerDashboardView(APIView):
     permission_classes = (IsVerifiedActiveUser,)
 
+    @extend_schema(responses={200: OpenApiTypes.OBJECT})
     def get(self, request):
         if request.user.role != 'FARMER':
             return Response({'detail': 'Only farmers can access this dashboard.'}, status=403)

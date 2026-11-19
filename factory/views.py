@@ -5,17 +5,24 @@ from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.exceptions import NotFound
+from drf_spectacular.utils import OpenApiTypes, extend_schema
 
 from farmer.models import HerbBatch
 from users.permissions import IsVerifiedActiveUser
 from users.services import log_activity
 
 from .models import ManufacturingBatch, ManufacturingRecord
-from .serializers import ManufacturingCreateSerializer, ManufacturingRecordSerializer
+from .serializers import (
+    ManufacturingCreateSerializer,
+    ManufacturingRecordSerializer,
+    ReceiveBatchSerializer,
+    FactoryProfileSerializer,
+)
 
 
 class FactoryProfileView(generics.RetrieveUpdateAPIView):
     permission_classes = (IsVerifiedActiveUser,)
+    serializer_class = FactoryProfileSerializer
 
     def get_object(self):
         if not self.request.user.organization:
@@ -33,21 +40,12 @@ class FactoryProfileView(generics.RetrieveUpdateAPIView):
         )
         return profile
 
-    def get_serializer_class(self):
-        from rest_framework import serializers
-        from .models import FactoryProfile
-
-        class Serializer(serializers.ModelSerializer):
-            class Meta:
-                model = FactoryProfile
-                fields = '__all__'
-                read_only_fields = ('factory_id', 'user', 'organization', 'created_at', 'updated_at')
-        return Serializer
 
 
 class FactoryDashboardView(APIView):
     permission_classes = (IsVerifiedActiveUser,)
 
+    @extend_schema(responses={200: OpenApiTypes.OBJECT})
     def get(self, request):
         if request.user.role != 'FACTORY':
             return Response({'detail': 'Only factory users can access this dashboard.'}, status=403)
@@ -78,6 +76,7 @@ class AvailableApprovedBatchesView(generics.ListAPIView):
 class ReceiveBatchView(APIView):
     permission_classes = (IsVerifiedActiveUser,)
 
+    @extend_schema(request=ReceiveBatchSerializer, responses={200: ReceiveBatchSerializer})
     @transaction.atomic
     def post(self, request):
         if request.user.role != 'FACTORY':
@@ -97,6 +96,7 @@ class ReceiveBatchView(APIView):
 class ManufacturingCreateView(APIView):
     permission_classes = (IsVerifiedActiveUser,)
 
+    @extend_schema(request=ManufacturingCreateSerializer, responses={201: ManufacturingRecordSerializer})
     @transaction.atomic
     def post(self, request):
         if request.user.role != 'FACTORY':

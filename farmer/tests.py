@@ -43,7 +43,7 @@ class FarmerBatchTests(TestCase):
         self.client.force_authenticate(self.user)
 
     def test_register_batch_and_unique_id(self):
-        response = self.client.post('/api/farmer/batches/register/', {
+        response = self.client.post('/api/farmers/batches/register/', {
             'herb_name': 'Ashwagandha',
             'botanical_name': 'Withania somnifera',
             'quantity': '10.000',

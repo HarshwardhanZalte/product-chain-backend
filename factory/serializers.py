@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from .models import FactoryProfile
 
 from .models import ManufacturingRecord
 
@@ -27,3 +28,20 @@ class ManufacturingRecordSerializer(serializers.ModelSerializer):
     class Meta:
         model = ManufacturingRecord
         fields = '__all__'
+
+
+class ReceiveBatchSerializer(serializers.Serializer):
+    batch_id = serializers.CharField()
+
+
+class FactoryProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FactoryProfile
+        fields = '__all__'
+        read_only_fields = (
+            'factory_id',
+            'user',
+            'organization',
+            'created_at',
+            'updated_at',
+        )

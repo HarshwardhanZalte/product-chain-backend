@@ -5,6 +5,7 @@ from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.exceptions import NotFound
+from drf_spectacular.utils import OpenApiTypes, extend_schema
 
 from farmer.models import HerbBatch
 from users.permissions import IsVerifiedActiveUser
@@ -16,11 +17,13 @@ from .serializers import (
     LabTestCreateSerializer,
     LabTestResultSerializer,
     LabTestSerializer,
+    LabProfileSerializer,
 )
 
 
 class LabProfileView(generics.RetrieveUpdateAPIView):
     permission_classes = (IsVerifiedActiveUser,)
+    serializer_class = LabProfileSerializer
 
     def get_object(self):
         if not self.request.user.organization:
@@ -37,20 +40,12 @@ class LabProfileView(generics.RetrieveUpdateAPIView):
         )
         return profile
 
-    def get_serializer_class(self):
-        from rest_framework import serializers
-
-        class Serializer(serializers.ModelSerializer):
-            class Meta:
-                model = LabProfile
-                fields = '__all__'
-                read_only_fields = ('lab_id', 'user', 'organization', 'created_at', 'updated_at')
-        return Serializer
 
 
 class LabDashboardView(APIView):
     permission_classes = (IsVerifiedActiveUser,)
 
+    @extend_schema(responses={200: OpenApiTypes.OBJECT})
     def get(self, request):
         if request.user.role != 'LAB':
             return Response({'detail': 'Only laboratory users can access this dashboard.'}, status=403)
@@ -69,6 +64,7 @@ class LabDashboardView(APIView):
 class SubmitForTestingView(APIView):
     permission_classes = (IsVerifiedActiveUser,)
 
+    @extend_schema(request=LabTestCreateSerializer, responses={201: LabTestSerializer})
     @transaction.atomic
     def post(self, request):
         serializer = LabTestCreateSerializer(data=request.data)
@@ -110,6 +106,7 @@ class LabRequestsView(generics.ListAPIView):
 class RecordTestResultView(APIView):
     permission_classes = (IsVerifiedActiveUser,)
 
+    @extend_schema(request=LabTestResultSerializer, responses={200: LabTestSerializer})
     @transaction.atomic
     def post(self, request):
         if request.user.role != 'LAB':
@@ -143,6 +140,7 @@ class RecordTestResultView(APIView):
 class ApproveTestView(APIView):
     permission_classes = (IsVerifiedActiveUser,)
 
+    @extend_schema(request=LabTestActionSerializer, responses={200: LabTestSerializer})
     @transaction.atomic
     def post(self, request):
         if request.user.role != 'LAB':
@@ -175,6 +173,7 @@ class ApproveTestView(APIView):
 class RejectTestView(APIView):
     permission_classes = (IsVerifiedActiveUser,)
 
+    @extend_schema(request=LabTestActionSerializer, responses={200: LabTestSerializer})
     @transaction.atomic
     def post(self, request):
         if request.user.role != 'LAB':

@@ -6,6 +6,7 @@ from django.db import transaction
 from rest_framework import generics, permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from drf_spectacular.utils import OpenApiTypes, extend_schema
 
 from factory.models import ManufacturingRecord
 from users.permissions import IsVerifiedActiveUser
@@ -39,6 +40,7 @@ def generate_product_qr(product):
 class ProductCreateView(APIView):
     permission_classes = (IsVerifiedActiveUser,)
 
+    @extend_schema(request=ProductCreateSerializer, responses={201: ProductSerializer})
     @transaction.atomic
     def post(self, request):
         if request.user.role != 'FACTORY':
@@ -116,6 +118,7 @@ class ProductDetailView(generics.RetrieveAPIView):
 class ProductQRView(APIView):
     permission_classes = (IsVerifiedActiveUser,)
 
+    @extend_schema(request=None, responses={200: ProductSerializer})
     def post(self, request, product_id):
         product = Product.objects.filter(product_id=product_id).first()
         if not product:
@@ -132,6 +135,7 @@ class PublicProductVerificationView(APIView):
     permission_classes = (permissions.AllowAny,)
     authentication_classes = ()
 
+    @extend_schema(responses={200: OpenApiTypes.OBJECT, 404: OpenApiTypes.OBJECT})
     def get(self, request, qr_reference):
         product = (
             Product.objects

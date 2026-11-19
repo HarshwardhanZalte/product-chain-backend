@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from .models import LabProfile, LabTest
 
 from .models import LabTest
 
@@ -29,3 +30,16 @@ class LabTestSerializer(serializers.ModelSerializer):
     class Meta:
         model = LabTest
         fields = '__all__'
+
+
+class LabProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LabProfile
+        fields = '__all__'
+        read_only_fields = (
+            'lab_id',
+            'user',
+            'organization',
+            'created_at',
+            'updated_at',
+        )

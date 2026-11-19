@@ -2,6 +2,7 @@ from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
 from farmer.models import HerbBatch
+from .models import CollectorProfile
 
 from .models import TransferEvent
 
@@ -38,3 +39,16 @@ class TransferEventSerializer(serializers.ModelSerializer):
     class Meta:
         model = TransferEvent
         fields = '__all__'
+
+
+class CollectorProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CollectorProfile
+        fields = '__all__'
+        read_only_fields = (
+            'collector_id',
+            'user',
+            'organization',
+            'created_at',
+            'updated_at',
+        )

@@ -47,6 +47,6 @@ class PublicVerificationTests(TestCase):
 
     def test_public_verification_returns_incomplete_without_input_batch(self):
         client = APIClient()
-        response = client.get(f'/api/product/verify/{self.product.qr_reference}/')
+        response = client.get(f'/api/products/verify/{self.product.qr_reference}/')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['verification_status'], 'INCOMPLETE')

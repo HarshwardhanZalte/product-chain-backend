@@ -3,10 +3,12 @@ from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
+from drf_spectacular.utils import OpenApiTypes, extend_schema
 
 from .models import ActivityLog, EmailOTP, User
 from .serializers import (
     ChangePasswordSerializer,
+    LogoutSerializer,
     EmailSerializer,
     LoginSerializer,
     OTPSerializer,
@@ -41,11 +43,12 @@ def get_tokens(user):
 class RegisterView(APIView):
     permission_classes = (permissions.AllowAny,)
 
+    @extend_schema(request=RegistrationSerializer, responses={201: UserSerializer})
     def post(self, request):
         serializer = RegistrationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
-        user = User.objects.create_user(
+        user = User.objects.create_user( 
             email=data['email'],
             password=data['password'],
             name=data['name'],
@@ -72,10 +75,11 @@ class RegisterView(APIView):
 class SendOTPView(APIView):
     permission_classes = (permissions.AllowAny,)
 
+    @extend_schema(request=EmailSerializer, responses={200: None})
     def post(self, request):
         serializer = EmailSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = User.objects.filter(email__iexact=serializer.validated_data['email']).first()
+        user = User.objects.filter(email__iexact=serializer.validated_data.get('email', '')).first()
         if not user:
             return Response({'detail': 'If the account exists, an OTP will be sent.'})
         _, created = create_otp(user, EmailOTP.Purpose.VERIFY_EMAIL)
@@ -94,6 +98,7 @@ class ResendOTPView(SendOTPView):
 class VerifyOTPView(APIView):
     permission_classes = (permissions.AllowAny,)
 
+    @extend_schema(request=OTPSerializer, responses={200: None})
     def post(self, request):
         serializer = OTPSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -116,6 +121,7 @@ class VerifyOTPView(APIView):
 class LoginView(APIView):
     permission_classes = (permissions.AllowAny,)
 
+    @extend_schema(request=LoginSerializer, responses={200: None})
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -140,6 +146,7 @@ class LoginView(APIView):
 class LogoutView(APIView):
     permission_classes = (permissions.IsAuthenticated,)
 
+    @extend_schema(request=LogoutSerializer, responses={200: None})
     def post(self, request):
         refresh = request.data.get('refresh')
         if not refresh:
@@ -155,6 +162,7 @@ class LogoutView(APIView):
 class ForgotPasswordView(APIView):
     permission_classes = (permissions.AllowAny,)
 
+    @extend_schema(request=EmailSerializer, responses={200: None})
     def post(self, request):
         serializer = EmailSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -170,6 +178,7 @@ class ForgotPasswordView(APIView):
 class ResetPasswordView(APIView):
     permission_classes = (permissions.AllowAny,)
 
+    @extend_schema(request=ResetPasswordSerializer, responses={200: None})
     def post(self, request):
         serializer = ResetPasswordSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -193,6 +202,7 @@ class ResetPasswordView(APIView):
 class ProfileView(APIView):
     permission_classes = (permissions.IsAuthenticated,)
 
+    @extend_schema(responses={200: UserSerializer})
     def get(self, request):
         if not request.user.is_email_verified:
             return Response({'detail': 'Email verification is required.'}, status=403)
@@ -202,6 +212,7 @@ class ProfileView(APIView):
 class ChangePasswordView(APIView):
     permission_classes = (permissions.IsAuthenticated,)
 
+    @extend_schema(request=ChangePasswordSerializer, responses={200: None})
     def post(self, request):
         serializer = ChangePasswordSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)

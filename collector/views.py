@@ -5,6 +5,7 @@ from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.exceptions import NotFound
+from drf_spectacular.utils import OpenApiTypes, extend_schema
 
 from farmer.models import HerbBatch
 from users.permissions import IsVerifiedActiveUser
@@ -15,11 +16,13 @@ from .serializers import (
     TransferActionSerializer,
     TransferCreateSerializer,
     TransferEventSerializer,
+    CollectorProfileSerializer,
 )
 
 
 class CollectorProfileView(generics.RetrieveUpdateAPIView):
     permission_classes = (IsVerifiedActiveUser,)
+    serializer_class = CollectorProfileSerializer
 
     def get_object(self):
         if not self.request.user.organization:
@@ -35,15 +38,6 @@ class CollectorProfileView(generics.RetrieveUpdateAPIView):
         )
         return profile
 
-    def get_serializer_class(self):
-        from rest_framework import serializers
-
-        class Serializer(serializers.ModelSerializer):
-            class Meta:
-                model = CollectorProfile
-                fields = '__all__'
-                read_only_fields = ('collector_id', 'user', 'organization', 'created_at', 'updated_at')
-        return Serializer
 
 
 class AvailableBatchesView(generics.ListAPIView):
@@ -59,6 +53,7 @@ class AvailableBatchesView(generics.ListAPIView):
 class InitiateTransferView(APIView):
     permission_classes = (IsVerifiedActiveUser,)
 
+    @extend_schema(request=TransferCreateSerializer, responses={201: TransferEventSerializer})
     @transaction.atomic
     def post(self, request):
         serializer = TransferCreateSerializer(data=request.data)
@@ -101,6 +96,7 @@ class PendingTransferView(generics.ListAPIView):
 class AcceptTransferView(APIView):
     permission_classes = (IsVerifiedActiveUser,)
 
+    @extend_schema(request=TransferActionSerializer, responses={200: TransferEventSerializer})
     @transaction.atomic
     def post(self, request):
         serializer = TransferActionSerializer(data=request.data)
@@ -133,6 +129,7 @@ class AcceptTransferView(APIView):
 class RejectTransferView(APIView):
     permission_classes = (IsVerifiedActiveUser,)
 
+    @extend_schema(request=TransferActionSerializer, responses={200: TransferEventSerializer})
     @transaction.atomic
     def post(self, request):
         serializer = TransferActionSerializer(data=request.data)
@@ -163,6 +160,7 @@ class TransferHistoryView(generics.ListAPIView):
 class CollectorDashboardView(APIView):
     permission_classes = (IsVerifiedActiveUser,)
 
+    @extend_schema(responses={200: OpenApiTypes.OBJECT})
     def get(self, request):
         if request.user.role != 'COLLECTOR':
             return Response({'detail': 'Only collectors can access this dashboard.'}, status=403)

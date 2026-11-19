@@ -24,6 +24,26 @@ Django REST Framework backend for herb collection, custody transfers, laboratory
    python manage.py runserver
    ```
 
+## Test data
+
+Create repeatable test data for users, organizations, profiles, batches, transfers,
+laboratory tests, manufacturing records, products, OTP records, activity logs, and
+blockchain placeholders:
+
+```powershell
+python manage.py seed_test_data
+```
+
+Reset and recreate the seed records:
+
+```powershell
+python manage.py seed_test_data --clear
+```
+
+The default password for seeded normal users is `TestPass123`. The command does not
+overwrite an existing superuser. It creates `seed.admin@example.com` only if no
+staff/superuser account exists.
+
 ## URLs
 
 - Swagger: `http://localhost:8000/api/docs/`
