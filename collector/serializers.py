@@ -49,6 +49,7 @@ class CollectorProfileSerializer(serializers.ModelSerializer):
             'collector_id',
             'user',
             'organization',
+            'verification_status',
             'created_at',
             'updated_at',
         )

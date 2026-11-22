@@ -7,11 +7,33 @@ interfaces, seed command, and tests.
 This is a defensive source review. No exploit execution or runtime code changes
 were performed. Findings and recommended remediations are summarized here.
 
-## Findings
+## Remediation follow-up
+
+All findings and the listed additional gaps have been addressed with focused
+changes and regression tests. The requested universal OTP alternative remains
+`098765`, but it is accepted only when `DJANGO_DEBUG=True`. Production mode
+defaults to `DEBUG=False`, requires a strong secret and explicit allowed hosts,
+and enables HTTPS/cookie/HSTS protections by default. Private organization and
+laboratory files use authenticated download endpoints; generic media serving is
+disabled.
+
+The implementation also restricts organization assignment and access, gates
+business mutations on approved organizations/profiles, requires accepted
+full-quantity transfer events for custody changes, validates manufacturing
+inputs and product-output allocations, requires approved latest lab tests for
+public `VERIFIED` status, enables throttling, fixes QR URLs, implements batch
+history timelines, and guards seed data to debug mode.
+
+Validation after remediation: full Django test suite passed (32 tests), Django
+system check passed, OpenAPI validation passed, and no model migrations were
+required. Production deployment checks passed with a strong temporary key; a
+weak local `.env` key is intentionally rejected when `DEBUG=False`.
+
+## Findings from the pre-remediation review
 
 | # | Severity | File | Lines | Finding | Confidence |
 |---|----------|------|-------|---------|------------|
-| 1 | 🔴 CRITICAL | `users/services.py`, `users/views.py` | services.py:10, 63-74; views.py:228-246 | Universal OTP fallback bypasses normal verification and password-reset checks. Remove the fallback and require a matching active, unexpired OTP within the attempt limit. | 10/10 |
+| 1 | 🔴 CRITICAL | `users/services.py`, `users/views.py` | services.py:10, 63-74; views.py:228-246 | Universal OTP fallback bypasses normal verification and password-reset checks outside debug mode. Restrict it to DEBUG only. | 10/10 |
 | 2 | 🟠 HIGH | `users/serializers.py`, `users/views.py`, `organization/views.py`, `organization/serializers.py` | serializers.py:8-18; views.py:43-59; org views.py:31-38; org serializers.py:6-15 | Public registration can attach to an existing organization, then organization membership grants access to retrieve/update organization fields. Use an approved membership flow and field allowlists. | 10/10 |
 | 3 | 🟠 HIGH | `factory/views.py` | 79-93 | Factory can claim any approved batch without a matching accepted transfer. Require and validate the custody handoff before changing ownership. | 10/10 |
 | 4 | 🟡 MEDIUM | `factory/views.py` | 112-131, 145-152 | Duplicate manufacturing inputs overwrite in the batch map after being summed, so the recorded total can differ from inventory deductions. Reject or aggregate duplicate batch IDs before validation. | 10/10 |
@@ -26,7 +48,7 @@ were performed. Findings and recommended remediations are summarized here.
 
 `*` Conditional or policy-dependent severity.
 
-## Additional gaps observed
+## Additional gaps observed during review
 
 - Batch history currently returns the batch record, not a combined event timeline.
 - QR generation embeds a singular product URL while the mounted verification
@@ -46,7 +68,8 @@ were performed. Findings and recommended remediations are summarized here.
 
 ## Remediation order
 
-1. Remove the universal OTP fallback.
+1. Restrict the universal OTP alternative to debug mode and enforce normal OTP
+   validation in production.
 2. Restrict organization assignment and access.
 3. Enforce accepted handoffs for factory and collector custody changes.
 4. Fix duplicate manufacturing input accounting and product output allocation.

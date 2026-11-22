@@ -8,9 +8,11 @@ from rest_framework.exceptions import NotFound
 from drf_spectacular.utils import OpenApiTypes, extend_schema
 
 from farmer.models import HerbBatch
-from users.permissions import IsVerifiedActiveUser
+from users.permissions import IsApprovedOrganizationUser, IsVerifiedActiveUser
 from users.services import log_activity
 
+from collector.models import TransferEvent
+from collector.services import accept_transfer
 from .models import ManufacturingBatch, ManufacturingRecord
 from .serializers import (
     ManufacturingCreateSerializer,
@@ -70,31 +72,40 @@ class AvailableApprovedBatchesView(generics.ListAPIView):
     def get_queryset(self):
         if getattr(self.request.user, 'role', None) != 'FACTORY':
             return HerbBatch.objects.none()
-        return HerbBatch.objects.filter(status=HerbBatch.Status.APPROVED, available_quantity__gt=0)
+        return HerbBatch.objects.filter(
+            current_owner=self.request.user,
+            status=HerbBatch.Status.SENT_TO_FACTORY,
+            available_quantity__gt=0,
+        )
 
 
 class ReceiveBatchView(APIView):
-    permission_classes = (IsVerifiedActiveUser,)
+    permission_classes = (IsApprovedOrganizationUser,)
 
     @extend_schema(request=ReceiveBatchSerializer, responses={200: ReceiveBatchSerializer})
     @transaction.atomic
     def post(self, request):
         if request.user.role != 'FACTORY':
             return Response({'detail': 'Only factory users can receive batches.'}, status=403)
-        batch = HerbBatch.objects.select_for_update().filter(
-            batch_id=request.data.get('batch_id'),
-            status=HerbBatch.Status.APPROVED,
-        ).first()
-        if not batch:
-            return Response({'detail': 'Approved batch not found.'}, status=404)
-        batch.current_owner = request.user
-        batch.status = HerbBatch.Status.SENT_TO_FACTORY
-        batch.save(update_fields=['current_owner', 'status', 'updated_at'])
-        return Response({'detail': 'Batch received by factory.', 'batch_id': batch.batch_id})
+        serializer = ReceiveBatchSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        event = TransferEvent.objects.select_for_update().filter(
+            event_id=serializer.validated_data['event_id'],
+            to_party=request.user,
+            status=TransferEvent.Status.INITIATED,
+        ).select_related('batch').first()
+        if not event:
+            return Response({'detail': 'Pending transfer not found.'}, status=404)
+        if not accept_transfer(event, request.user, serializer.validated_data.get('remarks', event.remarks)):
+            return Response(
+                {'detail': 'The batch changed after this transfer was initiated; the transfer was cancelled.'},
+                status=409,
+            )
+        return Response({'detail': 'Batch received by factory.', 'batch_id': event.batch.batch_id})
 
 
 class ManufacturingCreateView(APIView):
-    permission_classes = (IsVerifiedActiveUser,)
+    permission_classes = (IsApprovedOrganizationUser,)
 
     @extend_schema(request=ManufacturingCreateSerializer, responses={201: ManufacturingRecordSerializer})
     @transaction.atomic
@@ -115,7 +126,7 @@ class ManufacturingCreateView(APIView):
             batch = HerbBatch.objects.select_for_update().filter(
                 batch_id=item['batch_id'],
                 current_owner=request.user,
-                status__in=(HerbBatch.Status.APPROVED, HerbBatch.Status.SENT_TO_FACTORY),
+                status=HerbBatch.Status.SENT_TO_FACTORY,
             ).first()
             if not batch:
                 return Response(
@@ -125,6 +136,11 @@ class ManufacturingCreateView(APIView):
             if item['quantity_used'] > batch.available_quantity:
                 return Response(
                     {'detail': f"Quantity exceeds available quantity for {batch.batch_id}."},
+                    status=400,
+                )
+            if item['quantity_used'] > 0 and batch.unit != data['unit']:
+                return Response(
+                    {'detail': f'Unit mismatch for batch {batch.batch_id}.'},
                     status=400,
                 )
             total_input += item['quantity_used']

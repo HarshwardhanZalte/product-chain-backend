@@ -23,6 +23,12 @@ class ManufacturingCreateSerializer(serializers.Serializer):
     remarks = serializers.CharField(required=False, allow_blank=True)
     input_batches = ManufacturingBatchInputSerializer(many=True)
 
+    def validate_input_batches(self, value):
+        batch_ids = [item['batch_id'] for item in value]
+        if len(batch_ids) != len(set(batch_ids)):
+            raise serializers.ValidationError('A batch may only be listed once per manufacturing record.')
+        return value
+
 
 class ManufacturingRecordSerializer(serializers.ModelSerializer):
     class Meta:
@@ -31,7 +37,8 @@ class ManufacturingRecordSerializer(serializers.ModelSerializer):
 
 
 class ReceiveBatchSerializer(serializers.Serializer):
-    batch_id = serializers.CharField()
+    event_id = serializers.UUIDField()
+    remarks = serializers.CharField(required=False, allow_blank=True)
 
 
 class FactoryProfileSerializer(serializers.ModelSerializer):
@@ -42,6 +49,7 @@ class FactoryProfileSerializer(serializers.ModelSerializer):
             'factory_id',
             'user',
             'organization',
+            'verification_status',
             'created_at',
             'updated_at',
         )

@@ -1,7 +1,8 @@
 from rest_framework import serializers
+from drf_spectacular.utils import extend_schema_field
+from users.validators import validate_document_upload
 from .models import LabProfile, LabTest
 
-from .models import LabTest
 
 
 class LabTestCreateSerializer(serializers.Serializer):
@@ -18,7 +19,11 @@ class LabTestResultSerializer(serializers.Serializer):
     test_result = serializers.CharField(required=False, allow_blank=True)
     result_summary = serializers.CharField(required=False, allow_blank=True)
     remarks = serializers.CharField(required=False, allow_blank=True)
-    certificate_file = serializers.FileField(required=False)
+    certificate_file = serializers.FileField(
+        required=False,
+        allow_null=True,
+        validators=[validate_document_upload],
+    )
 
 
 class LabTestActionSerializer(serializers.Serializer):
@@ -27,6 +32,13 @@ class LabTestActionSerializer(serializers.Serializer):
 
 
 class LabTestSerializer(serializers.ModelSerializer):
+    certificate_file = serializers.FileField(write_only=True, required=False, allow_null=True)
+    certificate_available = serializers.SerializerMethodField()
+
+    @extend_schema_field(serializers.BooleanField())
+    def get_certificate_available(self, obj) -> bool:
+        return bool(obj.certificate_file)
+
     class Meta:
         model = LabTest
         fields = '__all__'
@@ -40,6 +52,7 @@ class LabProfileSerializer(serializers.ModelSerializer):
             'lab_id',
             'user',
             'organization',
+            'verification_status',
             'created_at',
             'updated_at',
         )

@@ -1,15 +1,18 @@
-import os
+from decimal import Decimal
 
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.db import transaction
+from django.db.models import Sum
+from django.http import FileResponse
+from django.shortcuts import get_object_or_404
 from rest_framework import generics, permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from drf_spectacular.utils import OpenApiTypes, extend_schema
 
 from factory.models import ManufacturingRecord
-from users.permissions import IsVerifiedActiveUser
+from users.permissions import IsApprovedOrganizationUser, IsVerifiedActiveUser
 from users.services import log_activity
 
 from .models import Product, ProductBatch
@@ -17,12 +20,10 @@ from .serializers import ProductCreateSerializer, ProductSerializer
 
 
 def generate_product_qr(product):
-    try:
-        import qrcode
-    except ImportError:
-        return
-    base_url = getattr(settings, 'PRODUCT_VERIFICATION_BASE_URL', 'http://localhost:8000')
-    verification_url = f"{base_url.rstrip('/')}/api/product/verify/{product.qr_reference}/"
+    import qrcode
+
+    base_url = settings.PRODUCT_VERIFICATION_BASE_URL
+    verification_url = f"{base_url.rstrip('/')}/api/products/verify/{product.qr_reference}/"
     qr = qrcode.QRCode(version=1, box_size=8, border=4)
     qr.add_data(verification_url)
     qr.make(fit=True)
@@ -38,7 +39,7 @@ def generate_product_qr(product):
 
 
 class ProductCreateView(APIView):
-    permission_classes = (IsVerifiedActiveUser,)
+    permission_classes = (IsApprovedOrganizationUser,)
 
     @extend_schema(request=ProductCreateSerializer, responses={201: ProductSerializer})
     @transaction.atomic
@@ -58,6 +59,17 @@ class ProductCreateView(APIView):
         ).first()
         if not record:
             return Response({'detail': 'Completed manufacturing record not found.'}, status=404)
+        links = list(record.input_batches.select_related('herb_batch').all())
+        if not links:
+            return Response({'detail': 'Manufacturing record has no input batches.'}, status=400)
+        if data['unit'] != record.unit:
+            return Response({'detail': 'Product unit must match the manufacturing output unit.'}, status=400)
+        allocated_quantity = record.products.aggregate(total=Sum('total_quantity'))['total'] or Decimal('0')
+        if allocated_quantity + data['total_quantity'] > record.output_quantity:
+            return Response(
+                {'detail': 'Product quantity allocations cannot exceed the manufacturing output.'},
+                status=400,
+            )
         product = Product.objects.create(
             product_name=data['product_name'],
             description=data.get('description', ''),
@@ -71,10 +83,7 @@ class ProductCreateView(APIView):
             unit=data['unit'],
             product_image=data.get('product_image'),
         )
-        manufacturing_links = record.input_batches.select_related('herb_batch').all()
-        if not manufacturing_links.exists():
-            raise ValueError('Manufacturing record has no input batches.')
-        for link in manufacturing_links:
+        for link in links:
             ProductBatch.objects.create(
                 product=product,
                 herb_batch=link.herb_batch,
@@ -116,7 +125,7 @@ class ProductDetailView(generics.RetrieveAPIView):
 
 
 class ProductQRView(APIView):
-    permission_classes = (IsVerifiedActiveUser,)
+    permission_classes = (IsApprovedOrganizationUser,)
 
     @extend_schema(request=None, responses={200: ProductSerializer})
     def post(self, request, product_id):
@@ -129,6 +138,35 @@ class ProductQRView(APIView):
                 return Response({'detail': 'Access denied.'}, status=403)
         generate_product_qr(product)
         return Response(ProductSerializer(product).data)
+
+
+class PublicProductAssetView(APIView):
+    permission_classes = (permissions.AllowAny,)
+    authentication_classes = ()
+
+    @extend_schema(responses={200: OpenApiTypes.BINARY, 404: OpenApiTypes.OBJECT})
+    def get(self, request, product_id, asset):
+        product = get_object_or_404(
+            Product,
+            product_id=product_id,
+            status__in=(Product.Status.ACTIVE, Product.Status.COMPLETED),
+        )
+        field_file = {
+            'image': product.product_image,
+            'qr': product.qr_code_image,
+        }.get(asset)
+        if not field_file:
+            return Response({'detail': 'Product asset not found.'}, status=404)
+        extension = field_file.name.rsplit('.', 1)[-1].lower()
+        content_type = {
+            'jpg': 'image/jpeg',
+            'jpeg': 'image/jpeg',
+            'png': 'image/png',
+            'webp': 'image/webp',
+        }.get(extension, 'application/octet-stream')
+        response = FileResponse(field_file.open('rb'), content_type=content_type)
+        response['X-Content-Type-Options'] = 'nosniff'
+        return response
 
 
 class PublicProductVerificationView(APIView):
@@ -155,11 +193,12 @@ class PublicProductVerificationView(APIView):
         for link in product.input_batches.all():
             batch = link.herb_batch
             tests = batch.laboratory_tests.all()
-            latest_test = tests.order_by('-created_at').first()
-            if batch.status in ('REJECTED',):
+            latest_test = tests[0] if tests else None
+            if batch.status == 'REJECTED' or (latest_test and latest_test.status == 'REJECTED'):
                 verification_status = 'REJECTED'
-            if not tests.exists():
-                verification_status = 'INCOMPLETE'
+            elif batch.status == 'ON_HOLD' or not latest_test or latest_test.status != 'APPROVED':
+                if verification_status != 'REJECTED':
+                    verification_status = 'INCOMPLETE'
             input_batches.append({
                 'batch_id': batch.batch_id,
                 'herb_name': batch.herb_name,
@@ -187,6 +226,11 @@ class PublicProductVerificationView(APIView):
 
         if product.status in ('REJECTED', 'HOLD'):
             verification_status = 'REJECTED'
+        elif (
+            product.status not in ('ACTIVE', 'COMPLETED')
+            or product.manufacturing_record.status != ManufacturingRecord.Status.COMPLETED
+        ) and verification_status != 'REJECTED':
+            verification_status = 'INCOMPLETE'
         if not input_batches:
             verification_status = 'INCOMPLETE'
 

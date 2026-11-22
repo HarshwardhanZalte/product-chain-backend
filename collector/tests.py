@@ -5,7 +5,7 @@ from farmer.models import FarmerProfile, HerbBatch
 from organization.models import Organization
 from users.models import User
 
-from .models import CollectorProfile
+from .models import CollectorProfile, TransferEvent
 
 
 class TransferWorkflowTests(TestCase):
@@ -20,6 +20,7 @@ class TransferWorkflowTests(TestCase):
             state='State',
             district='District',
             pincode='123456',
+            verification_status='VERIFIED',
         )
         self.farmer = User.objects.create_user(
             email='farmer@example.com', password='StrongPass123',
@@ -35,6 +36,7 @@ class TransferWorkflowTests(TestCase):
             user=self.farmer, organization=self.organization, farmer_name='Farmer',
             phone_number='123', address='Address', village='Village',
             district='District', state='State', pincode='123456',
+            verification_status='VERIFIED',
         )
         self.batch = HerbBatch.objects.create(
             batch_id='ASH-2026-00001', herb_name='Ashwagandha',
@@ -48,6 +50,7 @@ class TransferWorkflowTests(TestCase):
         CollectorProfile.objects.create(
             user=self.collector, organization=self.organization,
             collector_name='Collector', phone_number='123', address='Address',
+            verification_status='VERIFIED',
         )
 
     def test_accept_updates_owner_only_after_acceptance(self):
@@ -56,7 +59,7 @@ class TransferWorkflowTests(TestCase):
         initiate = client.post('/api/collectors/transfer/initiate/', {
             'batch_id': self.batch.batch_id,
             'to_party': self.collector.pk,
-            'quantity': '5.000',
+            'quantity': '10.000',
             'transfer_location': 'Collector depot',
         }, format='json')
         self.assertEqual(initiate.status_code, 201)
@@ -70,3 +73,64 @@ class TransferWorkflowTests(TestCase):
         self.assertEqual(accept.status_code, 200)
         self.batch.refresh_from_db()
         self.assertEqual(self.batch.current_owner, self.collector)
+
+    def test_partial_batch_transfer_is_rejected(self):
+        client = APIClient()
+        client.force_authenticate(self.farmer)
+        response = client.post('/api/collectors/transfer/initiate/', {
+            'batch_id': self.batch.batch_id,
+            'to_party': self.collector.pk,
+            'quantity': '5.000',
+            'transfer_location': 'Collector depot',
+        }, format='json')
+        self.assertEqual(response.status_code, 400)
+
+    def test_batch_history_includes_transfer_timeline(self):
+        client = APIClient()
+        client.force_authenticate(self.farmer)
+        create = client.post('/api/collectors/transfer/initiate/', {
+            'batch_id': self.batch.batch_id,
+            'to_party': self.collector.pk,
+            'quantity': '10.000',
+            'transfer_location': 'Collector depot',
+        }, format='json')
+        self.assertEqual(create.status_code, 201)
+        client.force_authenticate(self.collector)
+        accept = client.post('/api/collectors/transfer/accept/', {
+            'event_id': create.json()['event_id'],
+        }, format='json')
+        self.assertEqual(accept.status_code, 200)
+
+        client.force_authenticate(self.farmer)
+        history = client.get(f'/api/batches/batches/history/{self.batch.batch_id}/')
+        self.assertEqual(history.status_code, 200)
+        self.assertEqual(
+            [entry['event_type'] for entry in history.json()['history']],
+            ['BATCH_REGISTERED', 'TRANSFER'],
+        )
+        self.assertEqual(history.json()['history'][1]['status'], 'ACCEPTED')
+
+    def test_stale_transfer_is_cancelled_instead_of_changing_owner(self):
+        client = APIClient()
+        client.force_authenticate(self.farmer)
+        create = client.post('/api/collectors/transfer/initiate/', {
+            'batch_id': self.batch.batch_id,
+            'to_party': self.collector.pk,
+            'quantity': '10.000',
+            'transfer_location': 'Collector depot',
+        }, format='json')
+        event_id = create.json()['event_id']
+        self.batch.current_owner = self.collector
+        self.batch.save(update_fields=['current_owner'])
+
+        client.force_authenticate(self.collector)
+        accept = client.post(
+            '/api/collectors/transfer/accept/',
+            {'event_id': event_id},
+            format='json',
+        )
+        self.assertEqual(accept.status_code, 409)
+        self.assertEqual(
+            TransferEvent.objects.get(event_id=event_id).status,
+            TransferEvent.Status.CANCELLED,
+        )

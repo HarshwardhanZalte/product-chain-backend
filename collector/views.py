@@ -8,8 +8,13 @@ from rest_framework.exceptions import NotFound
 from drf_spectacular.utils import OpenApiTypes, extend_schema
 
 from farmer.models import HerbBatch
-from users.permissions import IsVerifiedActiveUser
+from users.permissions import (
+    IsApprovedOrganizationUser,
+    IsVerifiedActiveUser,
+    has_approved_business_identity,
+)
 from users.services import log_activity
+from .services import accept_transfer
 
 from .models import CollectorProfile, TransferEvent
 from .serializers import (
@@ -51,7 +56,7 @@ class AvailableBatchesView(generics.ListAPIView):
 
 
 class InitiateTransferView(APIView):
-    permission_classes = (IsVerifiedActiveUser,)
+    permission_classes = (IsApprovedOrganizationUser,)
 
     @extend_schema(request=TransferCreateSerializer, responses={201: TransferEventSerializer})
     @transaction.atomic
@@ -59,13 +64,46 @@ class InitiateTransferView(APIView):
         serializer = TransferCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
-        batch = data['batch']
-        if request.user.role != 'FARMER' or batch.current_owner_id != request.user.id:
+        batch = HerbBatch.objects.select_for_update().filter(
+            pk=data['batch'].pk,
+        ).first()
+        if not batch or batch.current_owner_id != request.user.id:
             return Response({'detail': 'You do not own this batch.'}, status=403)
-        if data['to_party'].role != 'COLLECTOR':
-            return Response({'detail': 'Transfer target must be a collector.'}, status=400)
-        if not data['to_party'].organization:
-            return Response({'detail': 'Collector organization is required.'}, status=400)
+        recipient_role = {
+            'FARMER': 'COLLECTOR',
+            'COLLECTOR': 'FACTORY',
+        }.get(request.user.role)
+        if not recipient_role or data['to_party'].role != recipient_role:
+            return Response({'detail': 'Transfer target role is not allowed.'}, status=400)
+        if data['to_party'].pk == request.user.pk:
+            return Response({'detail': 'A user cannot transfer a batch to themselves.'}, status=400)
+        if not has_approved_business_identity(data['to_party']):
+            return Response({'detail': 'Transfer target must be an approved, active business user.'}, status=400)
+        if data['quantity'] != batch.available_quantity:
+            return Response(
+                {'detail': 'Transfers must include the full available batch quantity until batch splitting is supported.'},
+                status=400,
+            )
+        allowed_statuses = {
+            'FARMER': (
+                HerbBatch.Status.REGISTERED,
+                HerbBatch.Status.COLLECTED,
+                HerbBatch.Status.APPROVED,
+            ),
+            'COLLECTOR': (
+                HerbBatch.Status.WITH_COLLECTOR,
+                HerbBatch.Status.APPROVED,
+            ),
+        }.get(request.user.role, ())
+        if batch.status not in allowed_statuses:
+            return Response({'detail': 'This batch cannot be transferred.'}, status=400)
+        if recipient_role == 'FACTORY':
+            latest_test = batch.laboratory_tests.order_by('-created_at').first()
+            if not latest_test or latest_test.status != 'APPROVED':
+                return Response(
+                    {'detail': 'A batch requires an approved latest laboratory test before factory transfer.'},
+                    status=400,
+                )
         event = TransferEvent.objects.create(
             batch=batch,
             from_party=request.user,
@@ -94,7 +132,7 @@ class PendingTransferView(generics.ListAPIView):
 
 
 class AcceptTransferView(APIView):
-    permission_classes = (IsVerifiedActiveUser,)
+    permission_classes = (IsApprovedOrganizationUser,)
 
     @extend_schema(request=TransferActionSerializer, responses={200: TransferEventSerializer})
     @transaction.atomic
@@ -108,26 +146,28 @@ class AcceptTransferView(APIView):
         ).select_related('batch').first()
         if not event:
             return Response({'detail': 'Pending transfer not found.'}, status=404)
-        event.status = TransferEvent.Status.ACCEPTED
-        event.remarks = serializer.validated_data.get('remarks', event.remarks)
-        event.save(update_fields=['status', 'remarks', 'updated_at'])
-        batch = event.batch
-        batch.current_owner = request.user
-        batch.status = HerbBatch.Status.WITH_COLLECTOR
-        batch.save(update_fields=['current_owner', 'status', 'updated_at'])
+        if not accept_transfer(
+            event,
+            request.user,
+            serializer.validated_data.get('remarks', event.remarks),
+        ):
+            return Response(
+                {'detail': 'The batch changed after this transfer was initiated; the transfer was cancelled.'},
+                status=409,
+            )
         log_activity(
             request.user,
             'TRANSFER_ACCEPTED',
             'TransferEvent',
             event.event_id,
-            f'Collector accepted batch {batch.batch_id}',
+            f'{request.user.role.title()} accepted batch {event.batch.batch_id}',
             request.META.get('REMOTE_ADDR'),
         )
         return Response(TransferEventSerializer(event).data)
 
 
 class RejectTransferView(APIView):
-    permission_classes = (IsVerifiedActiveUser,)
+    permission_classes = (IsApprovedOrganizationUser,)
 
     @extend_schema(request=TransferActionSerializer, responses={200: TransferEventSerializer})
     @transaction.atomic

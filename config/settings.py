@@ -13,24 +13,46 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 import os
 from datetime import timedelta
 from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlsplit
+
+from django.core.exceptions import ImproperlyConfigured
+from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / '.env')
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.getenv(
-    'DJANGO_SECRET_KEY',
-    'django-insecure-local-development-key-change-in-production',
-)
+DEBUG = os.getenv('DJANGO_DEBUG', 'False').lower() == 'true'
+SECRET_KEY = os.getenv('DJANGO_SECRET_KEY')
+if not DEBUG and (
+    not SECRET_KEY
+    or len(SECRET_KEY) < 50
+    or len(set(SECRET_KEY)) < 5
+    or SECRET_KEY.startswith('django-insecure-')
+    or 'replace-with' in SECRET_KEY.lower()
+):
+    raise ImproperlyConfigured(
+        'Set DJANGO_SECRET_KEY to a strong random value of at least 50 characters when DEBUG is False.'
+    )
+if not SECRET_KEY:
+    SECRET_KEY = 'django-insecure-local-development-key-change-before-deployment'
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.getenv('DJANGO_DEBUG', 'True').lower() == 'true'
-
-ALLOWED_HOSTS = os.getenv('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1,[::1]').split(',')
+allowed_hosts_setting = os.getenv('DJANGO_ALLOWED_HOSTS')
+if not DEBUG and not allowed_hosts_setting:
+    raise ImproperlyConfigured('DJANGO_ALLOWED_HOSTS must be configured when DEBUG is False.')
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in (allowed_hosts_setting or 'localhost,127.0.0.1,[::1]').split(',')
+    if host.strip()
+]
+if not DEBUG and (not ALLOWED_HOSTS or '*' in ALLOWED_HOSTS):
+    raise ImproperlyConfigured(
+        'Set DJANGO_ALLOWED_HOSTS to explicit host names when DEBUG is False.'
+    )
 
 
 # Application definition
@@ -93,9 +115,57 @@ WSGI_APPLICATION = 'config.wsgi.application'
 
 
 # Database
-# https://docs.djangoproject.com/en/6.1/ref/settings/#databases
+# A Supabase connection URL takes precedence over the local PostgreSQL settings.
+SUPABASE_DATABASE_URL = os.getenv('SUPABASE_DATABASE_URL', '').strip()
+SUPABASE_DB_POOLER = os.getenv('SUPABASE_DB_POOLER', 'session').strip().lower()
 
-if os.getenv('POSTGRES_DB'):
+if not DEBUG and not SUPABASE_DATABASE_URL:
+    raise ImproperlyConfigured(
+        'SUPABASE_DATABASE_URL must be configured when DEBUG is False.'
+    )
+
+if SUPABASE_DATABASE_URL:
+    parsed_database_url = urlsplit(SUPABASE_DATABASE_URL)
+    if parsed_database_url.scheme not in ('postgres', 'postgresql'):
+        raise ImproperlyConfigured('SUPABASE_DATABASE_URL must use PostgreSQL.')
+    if not parsed_database_url.hostname or not parsed_database_url.path.strip('/'):
+        raise ImproperlyConfigured(
+            'SUPABASE_DATABASE_URL must include a host and database name.'
+        )
+    if not parsed_database_url.username or not parsed_database_url.password:
+        raise ImproperlyConfigured(
+            'SUPABASE_DATABASE_URL must include database credentials.'
+        )
+    if SUPABASE_DB_POOLER not in ('session', 'transaction'):
+        raise ImproperlyConfigured(
+            'SUPABASE_DB_POOLER must be either session or transaction.'
+        )
+    database_query = parse_qs(parsed_database_url.query)
+    sslmode = database_query.get('sslmode', ['require'])[0]
+    if sslmode not in ('require', 'verify-ca', 'verify-full'):
+        raise ImproperlyConfigured(
+            'Supabase PostgreSQL connections must require SSL.'
+        )
+    database_options = {'sslmode': sslmode}
+    if SUPABASE_DB_POOLER == 'transaction':
+        database_options['prepare_threshold'] = None
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': unquote(parsed_database_url.path.lstrip('/')),
+            'USER': unquote(parsed_database_url.username or ''),
+            'PASSWORD': unquote(parsed_database_url.password or ''),
+            'HOST': parsed_database_url.hostname,
+            'PORT': parsed_database_url.port or 5432,
+            'OPTIONS': database_options,
+            'CONN_MAX_AGE': (
+                0 if SUPABASE_DB_POOLER == 'transaction'
+                else int(os.getenv('DB_CONN_MAX_AGE', '60'))
+            ),
+            'DISABLE_SERVER_SIDE_CURSORS': SUPABASE_DB_POOLER == 'transaction',
+        }
+    }
+elif os.getenv('POSTGRES_DB'):
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
@@ -170,6 +240,56 @@ OTP_MAX_ATTEMPTS = int(os.getenv('OTP_MAX_ATTEMPTS', '5'))
 
 MEDIA_URL = os.getenv('MEDIA_URL', '/upload/')
 MEDIA_ROOT = BASE_DIR / 'upload'
+
+SUPABASE_STORAGE_SETTINGS = {
+    'endpoint_url': os.getenv('SUPABASE_STORAGE_ENDPOINT', '').strip(),
+    'region_name': os.getenv('SUPABASE_STORAGE_REGION', '').strip(),
+    'bucket_name': os.getenv('SUPABASE_STORAGE_BUCKET', '').strip(),
+    'access_key': os.getenv('SUPABASE_STORAGE_ACCESS_KEY_ID', '').strip(),
+    'secret_key': os.getenv('SUPABASE_STORAGE_SECRET_ACCESS_KEY', '').strip(),
+}
+storage_configured = all(SUPABASE_STORAGE_SETTINGS.values())
+storage_partially_configured = any(SUPABASE_STORAGE_SETTINGS.values())
+
+if storage_partially_configured and not storage_configured:
+    raise ImproperlyConfigured(
+        'Configure all SUPABASE_STORAGE_* settings or leave them all empty.'
+    )
+if not DEBUG and not storage_configured:
+    raise ImproperlyConfigured(
+        'Supabase Storage credentials and bucket must be configured when DEBUG is False.'
+    )
+
+if storage_configured:
+    STORAGES = {
+        'default': {
+            'BACKEND': 'storages.backends.s3.S3Storage',
+            'OPTIONS': {
+                **SUPABASE_STORAGE_SETTINGS,
+                'signature_version': 's3v4',
+                'addressing_style': 'path',
+                'file_overwrite': False,
+                'default_acl': None,
+                'querystring_auth': True,
+            },
+        },
+        'staticfiles': {
+            'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
+        },
+    }
+else:
+    STORAGES = {
+        'default': {
+            'BACKEND': 'django.core.files.storage.FileSystemStorage',
+            'OPTIONS': {
+                'location': MEDIA_ROOT,
+                'base_url': MEDIA_URL,
+            },
+        },
+        'staticfiles': {
+            'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
+        },
+    }
 PRODUCT_VERIFICATION_BASE_URL = os.getenv(
     'PRODUCT_VERIFICATION_BASE_URL',
     'http://localhost:8000',
@@ -189,6 +309,10 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
     ),
+    'DEFAULT_THROTTLE_CLASSES': (
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ),
     'DEFAULT_PAGINATION_CLASS':
         'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
@@ -197,6 +321,23 @@ REST_FRAMEWORK = {
         'user': os.getenv('API_USER_THROTTLE', '120/minute'),
     },
 }
+
+SECURE_SSL_REDIRECT = os.getenv(
+    'SECURE_SSL_REDIRECT', str(not DEBUG)
+).lower() == 'true'
+SESSION_COOKIE_SECURE = os.getenv(
+    'SESSION_COOKIE_SECURE', str(not DEBUG)
+).lower() == 'true'
+CSRF_COOKIE_SECURE = os.getenv(
+    'CSRF_COOKIE_SECURE', str(not DEBUG)
+).lower() == 'true'
+SECURE_HSTS_SECONDS = int(os.getenv('SECURE_HSTS_SECONDS', '31536000' if not DEBUG else '0'))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = os.getenv(
+    'SECURE_HSTS_INCLUDE_SUBDOMAINS', str(not DEBUG)
+).lower() == 'true'
+SECURE_HSTS_PRELOAD = os.getenv(
+    'SECURE_HSTS_PRELOAD', str(not DEBUG)
+).lower() == 'true'
 
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(
@@ -210,6 +351,9 @@ SIMPLE_JWT = {
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
 
+CORS_ALLOW_ALL_ORIGINS = os.getenv(
+    'CORS_ALLOW_ALL_ORIGINS', 'False'
+).lower() == 'true'
 CORS_ALLOWED_ORIGINS = [
     origin.strip()
     for origin in os.getenv(
@@ -218,6 +362,17 @@ CORS_ALLOWED_ORIGINS = [
     ).split(',')
     if origin.strip()
 ]
+if '*' in CORS_ALLOWED_ORIGINS and not DEBUG:
+    raise ImproperlyConfigured(
+        'Use explicit CORS_ALLOWED_ORIGINS in production; wildcard origins are not allowed.'
+    )
+CORS_ALLOWED_ORIGINS = [
+    origin for origin in CORS_ALLOWED_ORIGINS if origin != '*'
+]
+if CORS_ALLOW_ALL_ORIGINS and not DEBUG:
+    raise ImproperlyConfigured(
+        'CORS_ALLOW_ALL_ORIGINS must be False when DEBUG is False.'
+    )
 
 SPECTACULAR_SETTINGS = {
     'TITLE': 'Ayurvedic Herb Traceability API',

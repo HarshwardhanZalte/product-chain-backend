@@ -1,6 +1,6 @@
 from rest_framework import serializers
-
-from organization.models import Organization
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
 
 from .models import User
 
@@ -11,11 +11,6 @@ class RegistrationSerializer(serializers.Serializer):
     phone_number = serializers.CharField(max_length=20, required=False, allow_blank=True)
     password = serializers.CharField(min_length=8, write_only=True)
     role = serializers.ChoiceField(choices=User.Role.values)
-    organization = serializers.PrimaryKeyRelatedField(
-        queryset=Organization.objects.all(),
-        required=False,
-        allow_null=True,
-    )
 
     def validate_email(self, value):
         if User.objects.filter(email__iexact=value).exists():
@@ -26,6 +21,20 @@ class RegistrationSerializer(serializers.Serializer):
         if value == User.Role.ADMIN:
             raise serializers.ValidationError('Administrator accounts cannot be registered publicly.')
         return value
+
+    def validate_password(self, value):
+        try:
+            validate_password(value)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.messages)
+        return value
+
+    def validate(self, attrs):
+        if 'organization' in self.initial_data:
+            raise serializers.ValidationError({
+                'organization': 'Organization membership is assigned through organization onboarding.'
+            })
+        return attrs
 
 
 class OTPSerializer(serializers.Serializer):
@@ -47,10 +56,24 @@ class ResetPasswordSerializer(serializers.Serializer):
     otp = serializers.CharField(min_length=6, max_length=6)
     new_password = serializers.CharField(min_length=8, write_only=True)
 
+    def validate_new_password(self, value):
+        try:
+            validate_password(value)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.messages)
+        return value
+
 
 class ChangePasswordSerializer(serializers.Serializer):
     current_password = serializers.CharField(write_only=True)
     new_password = serializers.CharField(min_length=8, write_only=True)
+
+    def validate_new_password(self, value):
+        try:
+            validate_password(value)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.messages)
+        return value
 
 
 class LogoutSerializer(serializers.Serializer):

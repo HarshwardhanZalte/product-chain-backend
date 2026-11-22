@@ -19,6 +19,7 @@ class FarmerBatchTests(TestCase):
             state='State',
             district='District',
             pincode='123456',
+            verification_status='VERIFIED',
         )
         self.user = User.objects.create_user(
             email='farmer@example.com',
@@ -38,6 +39,7 @@ class FarmerBatchTests(TestCase):
             district='District',
             state='State',
             pincode='123456',
+            verification_status='VERIFIED',
         )
         self.client = APIClient()
         self.client.force_authenticate(self.user)
@@ -60,3 +62,37 @@ class FarmerBatchTests(TestCase):
         batch = HerbBatch.objects.get(batch_id=response.json()['batch_id'])
         self.assertEqual(batch.available_quantity, batch.quantity)
         self.assertTrue(batch.batch_id.startswith('ASH-'))
+
+    def test_batch_registration_requires_approved_organization_and_profile(self):
+        response_data = {
+            'herb_name': 'Ashwagandha',
+            'botanical_name': 'Withania somnifera',
+            'quantity': '10.000',
+            'unit': 'kg',
+            'source_type': 'CULTIVATED',
+            'collection_date': '2026-11-19',
+            'collection_time': '10:30:00',
+            'collection_address': 'Farm',
+            'village': 'Village',
+            'district': 'District',
+            'state': 'State',
+        }
+        self.profile.verification_status = 'PENDING'
+        self.profile.save(update_fields=['verification_status'])
+        profile_pending = self.client.post(
+            '/api/farmers/batches/register/',
+            response_data,
+            format='json',
+        )
+        self.assertEqual(profile_pending.status_code, 403)
+
+        self.profile.verification_status = 'VERIFIED'
+        self.profile.save(update_fields=['verification_status'])
+        self.organization.verification_status = 'PENDING'
+        self.organization.save(update_fields=['verification_status'])
+        organization_pending = self.client.post(
+            '/api/farmers/batches/register/',
+            response_data,
+            format='json',
+        )
+        self.assertEqual(organization_pending.status_code, 403)

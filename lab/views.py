@@ -8,7 +8,7 @@ from rest_framework.exceptions import NotFound
 from drf_spectacular.utils import OpenApiTypes, extend_schema
 
 from farmer.models import HerbBatch
-from users.permissions import IsVerifiedActiveUser
+from users.permissions import IsApprovedOrganizationUser, IsVerifiedActiveUser
 from users.services import log_activity
 
 from .models import LabProfile, LabTest
@@ -19,6 +19,13 @@ from .serializers import (
     LabTestSerializer,
     LabProfileSerializer,
 )
+
+def is_current_test(test):
+    return (
+        test.status in (LabTest.Status.PENDING, LabTest.Status.UNDER_TESTING)
+        and test.batch.status in (HerbBatch.Status.SENT_TO_LAB, HerbBatch.Status.UNDER_TESTING)
+        and test.batch.current_owner_id == test.submitted_by_id
+    )
 
 
 class LabProfileView(generics.RetrieveUpdateAPIView):
@@ -62,7 +69,7 @@ class LabDashboardView(APIView):
 
 
 class SubmitForTestingView(APIView):
-    permission_classes = (IsVerifiedActiveUser,)
+    permission_classes = (IsApprovedOrganizationUser,)
 
     @extend_schema(request=LabTestCreateSerializer, responses={201: LabTestSerializer})
     @transaction.atomic
@@ -76,9 +83,21 @@ class SubmitForTestingView(APIView):
         ).first()
         if not batch:
             return Response({'detail': 'Owned batch not found.'}, status=404)
+        if batch.status not in (
+            HerbBatch.Status.REGISTERED,
+            HerbBatch.Status.COLLECTED,
+            HerbBatch.Status.WITH_COLLECTOR,
+            HerbBatch.Status.APPROVED,
+        ):
+            return Response({'detail': 'This batch is not eligible for laboratory testing.'}, status=400)
         laboratory = LabProfile.objects.filter(lab_id=data['laboratory_id']).first()
         if not laboratory:
             return Response({'detail': 'Laboratory not found.'}, status=404)
+        if (
+            laboratory.verification_status != 'VERIFIED'
+            or laboratory.organization.verification_status != 'VERIFIED'
+        ):
+            return Response({'detail': 'The laboratory is not approved to receive samples.'}, status=400)
         test = LabTest.objects.create(
             batch=batch,
             laboratory=laboratory,
@@ -104,7 +123,7 @@ class LabRequestsView(generics.ListAPIView):
 
 
 class RecordTestResultView(APIView):
-    permission_classes = (IsVerifiedActiveUser,)
+    permission_classes = (IsApprovedOrganizationUser,)
 
     @extend_schema(request=LabTestResultSerializer, responses={200: LabTestSerializer})
     @transaction.atomic
@@ -121,6 +140,8 @@ class RecordTestResultView(APIView):
         ).select_related('batch').first()
         if not test:
             return Response({'detail': 'Assigned test not found.'}, status=404)
+        if not is_current_test(test):
+            return Response({'detail': 'This test is no longer active for the current batch owner.'}, status=400)
         for field in ('test_parameters', 'test_result', 'result_summary', 'remarks'):
             if field in data:
                 setattr(test, field, data[field])
@@ -138,7 +159,7 @@ class RecordTestResultView(APIView):
 
 
 class ApproveTestView(APIView):
-    permission_classes = (IsVerifiedActiveUser,)
+    permission_classes = (IsApprovedOrganizationUser,)
 
     @extend_schema(request=LabTestActionSerializer, responses={200: LabTestSerializer})
     @transaction.atomic
@@ -154,6 +175,15 @@ class ApproveTestView(APIView):
         ).select_related('batch').first()
         if not test:
             return Response({'detail': 'Assigned test not found.'}, status=404)
+        if (
+            not is_current_test(test)
+            or test.status != LabTest.Status.UNDER_TESTING
+            or not test.test_result.strip()
+        ):
+            return Response(
+                {'detail': 'An active test with a recorded result is required for approval.'},
+                status=400,
+            )
         test.status = LabTest.Status.APPROVED
         test.reviewed_by = request.user
         test.remarks = serializer.validated_data.get('remarks', test.remarks)
@@ -171,7 +201,7 @@ class ApproveTestView(APIView):
 
 
 class RejectTestView(APIView):
-    permission_classes = (IsVerifiedActiveUser,)
+    permission_classes = (IsApprovedOrganizationUser,)
 
     @extend_schema(request=LabTestActionSerializer, responses={200: LabTestSerializer})
     @transaction.atomic
@@ -187,6 +217,8 @@ class RejectTestView(APIView):
         ).select_related('batch').first()
         if not test:
             return Response({'detail': 'Assigned test not found.'}, status=404)
+        if not is_current_test(test):
+            return Response({'detail': 'This test is no longer active for the current batch owner.'}, status=400)
         test.status = LabTest.Status.REJECTED
         test.reviewed_by = request.user
         test.remarks = serializer.validated_data.get('remarks', test.remarks)

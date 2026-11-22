@@ -4,7 +4,10 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from drf_spectacular.utils import OpenApiTypes, extend_schema
+import logging
 
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
 from .models import ActivityLog, EmailOTP, User
 from .serializers import (
     ChangePasswordSerializer,
@@ -16,8 +19,9 @@ from .serializers import (
     ResetPasswordSerializer,
     UserSerializer,
 )
-from .services import create_otp, verify_otp
+from .services import EmailDeliveryError, create_otp, verify_otp
 
+logger = logging.getLogger(__name__)
 
 def client_ip(request):
     forwarded = request.META.get('HTTP_X_FORWARDED_FOR')
@@ -54,13 +58,13 @@ class RegisterView(APIView):
             name=data['name'],
             phone_number=data.get('phone_number', ''),
             role=data['role'],
-            organization=data.get('organization'),
             is_email_verified=False,
         )
         try:
             create_otp(user, EmailOTP.Purpose.VERIFY_EMAIL)
-        except Exception:
+        except EmailDeliveryError:
             user.delete()
+            logger.exception('Unable to send registration OTP for user %s', user.user_id)
             return Response(
                 {'detail': 'Unable to send verification email.'},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -82,7 +86,14 @@ class SendOTPView(APIView):
         user = User.objects.filter(email__iexact=serializer.validated_data.get('email', '')).first()
         if not user:
             return Response({'detail': 'If the account exists, an OTP will be sent.'})
-        _, created = create_otp(user, EmailOTP.Purpose.VERIFY_EMAIL)
+        try:
+            _, created = create_otp(user, EmailOTP.Purpose.VERIFY_EMAIL)
+        except EmailDeliveryError:
+            logger.exception('Unable to resend verification OTP for user %s', user.user_id)
+            return Response(
+                {'detail': 'Unable to send verification email.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
         if not created:
             return Response(
                 {'detail': 'OTP resend cooldown is active.'},
@@ -121,10 +132,14 @@ class ResendOTPView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        _, created = create_otp(
-            user,
-            EmailOTP.Purpose.VERIFY_EMAIL,
-        )
+        try:
+            _, created = create_otp(user, EmailOTP.Purpose.VERIFY_EMAIL)
+        except EmailDeliveryError:
+            logger.exception('Unable to resend verification OTP for user %s', user.user_id)
+            return Response(
+                {'detail': 'Unable to send verification email.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
         if not created:
             return Response(
                 {'detail': 'OTP resend cooldown is active.'},
@@ -219,8 +234,8 @@ class ForgotPasswordView(APIView):
         if user:
             try:
                 create_otp(user, EmailOTP.Purpose.RESET_PASSWORD)
-            except Exception:
-                pass
+            except EmailDeliveryError:
+                logger.exception('Unable to send password reset OTP for user %s', user.user_id)
         return Response({'detail': 'If the account exists, a password reset OTP will be sent.'})
 
 
@@ -235,6 +250,10 @@ class ResetPasswordView(APIView):
         user = User.objects.filter(email__iexact=data['email']).first()
         if not user:
             return Response({'detail': 'Invalid reset request.'}, status=400)
+        try:
+            validate_password(data['new_password'], user=user)
+        except DjangoValidationError as exc:
+            return Response({'new_password': exc.messages}, status=400)
         ok, message = verify_otp(
             user,
             EmailOTP.Purpose.RESET_PASSWORD,
@@ -268,6 +287,10 @@ class ChangePasswordView(APIView):
         data = serializer.validated_data
         if not request.user.check_password(data['current_password']):
             return Response({'detail': 'Current password is incorrect.'}, status=400)
+        try:
+            validate_password(data['new_password'], user=request.user)
+        except DjangoValidationError as exc:
+            return Response({'new_password': exc.messages}, status=400)
         request.user.set_password(data['new_password'])
         request.user.save(update_fields=['password', 'updated_at'])
         log_activity(request, 'PASSWORD_CHANGED', 'User', request.user.user_id)

@@ -1,13 +1,14 @@
 from datetime import date
 
 from django.db import transaction
+from django.db import models
 from rest_framework import filters, generics, permissions, status
 from rest_framework.exceptions import NotFound
 from drf_spectacular.utils import OpenApiTypes, extend_schema
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from users.permissions import IsVerifiedActiveUser
+from users.permissions import IsApprovedOrganizationUser, IsVerifiedActiveUser
 
 from .models import FarmerProfile, HerbBatch
 from .serializers import FarmerProfileSerializer, HerbBatchSerializer
@@ -71,7 +72,7 @@ class FarmerDashboardView(APIView):
 
 class BatchRegisterView(generics.CreateAPIView):
     serializer_class = HerbBatchSerializer
-    permission_classes = (IsVerifiedActiveUser,)
+    permission_classes = (IsApprovedOrganizationUser,)
 
     @transaction.atomic
     def perform_create(self, serializer):
@@ -100,7 +101,7 @@ class BatchListView(generics.ListAPIView):
     ordering_fields = ('created_at', 'quantity', 'status')
 
     def get_queryset(self):
-        if getattr(self.request.user, 'is_staff', False):
+        if self.request.user.is_staff or self.request.user.role == 'ADMIN':
             return HerbBatch.objects.all()
         if self.request.user.role == 'FARMER':
             return HerbBatch.objects.filter(farmer__user=self.request.user)
@@ -114,8 +115,16 @@ class BatchDetailView(generics.RetrieveUpdateAPIView):
     permission_classes = (IsVerifiedActiveUser,)
     lookup_field = 'batch_id'
 
+    def get_permissions(self):
+        permission_class = (
+            IsApprovedOrganizationUser
+            if self.request.method not in permissions.SAFE_METHODS
+            else IsVerifiedActiveUser
+        )
+        return [permission_class()]
+
     def get_queryset(self):
-        if getattr(self.request.user, 'is_staff', False):
+        if self.request.user.is_staff or self.request.user.role == 'ADMIN':
             return HerbBatch.objects.all()
         if self.request.user.role == 'FARMER':
             return HerbBatch.objects.filter(farmer__user=self.request.user)
@@ -129,13 +138,80 @@ class BatchDetailView(generics.RetrieveUpdateAPIView):
         serializer.save()
 
 
-class BatchHistoryView(generics.ListAPIView):
-    serializer_class = HerbBatchSerializer
+class BatchHistoryView(APIView):
     permission_classes = (IsVerifiedActiveUser,)
 
-    def get_queryset(self):
-        batch_id = self.kwargs['batch_id']
-        return HerbBatch.objects.filter(
-            batch_id=batch_id,
-            farmer__user=self.request.user,
+    @extend_schema(responses={200: OpenApiTypes.OBJECT, 404: OpenApiTypes.OBJECT})
+    def get(self, request, batch_id):
+        from collector.models import TransferEvent
+        from factory.models import ManufacturingBatch
+        from lab.models import LabTest
+        from product.models import ProductBatch
+
+        batch = HerbBatch.objects.filter(batch_id=batch_id).first()
+        if not batch:
+            return Response({'detail': 'Batch not found.'}, status=404)
+        user = request.user
+        is_admin = user.is_staff or user.role == 'ADMIN'
+        is_participant = (
+            batch.current_owner_id == user.pk
+            or batch.farmer.user_id == user.pk
+            or TransferEvent.objects.filter(batch=batch).filter(
+                models.Q(from_party=user) | models.Q(to_party=user)
+            ).exists()
+            or LabTest.objects.filter(batch=batch, laboratory__user=user).exists()
+            or ManufacturingBatch.objects.filter(
+                herb_batch=batch,
+                manufacturing_record__factory__user=user,
+            ).exists()
+            or ProductBatch.objects.filter(
+                herb_batch=batch,
+                product__manufacturer__user=user,
+            ).exists()
         )
+        if not (is_admin or is_participant):
+            return Response({'detail': 'Batch not found.'}, status=404)
+
+        history = [{
+            'event_type': 'BATCH_REGISTERED',
+            'event_id': batch.batch_id,
+            'status': batch.status,
+            'occurred_at': batch.created_at.isoformat(),
+        }]
+        history.extend({
+            'event_type': 'TRANSFER',
+            'event_id': str(event.event_id),
+            'status': event.status,
+            'from': event.from_party.name,
+            'to': event.to_party.name,
+            'quantity': str(event.quantity),
+            'unit': batch.unit,
+            'occurred_at': event.created_at.isoformat(),
+        } for event in TransferEvent.objects.filter(batch=batch).select_related('from_party', 'to_party'))
+        history.extend({
+            'event_type': 'LAB_TEST',
+            'event_id': str(test.test_id),
+            'status': test.status,
+            'laboratory': test.laboratory.laboratory_name,
+            'occurred_at': test.created_at.isoformat(),
+        } for test in LabTest.objects.filter(batch=batch).select_related('laboratory'))
+        history.extend({
+            'event_type': 'MANUFACTURING',
+            'event_id': str(link.manufacturing_record.manufacturing_id),
+            'status': link.manufacturing_record.status,
+            'quantity_used': str(link.quantity_used),
+            'unit': link.unit,
+            'occurred_at': link.created_at.isoformat(),
+        } for link in ManufacturingBatch.objects.filter(herb_batch=batch).select_related('manufacturing_record'))
+        history.extend({
+            'event_type': 'PRODUCT',
+            'event_id': str(link.product.product_id),
+            'status': link.product.status,
+            'product_name': link.product.product_name,
+            'occurred_at': link.created_at.isoformat(),
+        } for link in ProductBatch.objects.filter(herb_batch=batch).select_related('product'))
+        history.sort(key=lambda event: event['occurred_at'])
+        return Response({
+            'batch': HerbBatchSerializer(batch).data,
+            'history': history,
+        })

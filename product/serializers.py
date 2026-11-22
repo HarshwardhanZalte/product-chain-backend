@@ -1,6 +1,16 @@
+from django.urls import reverse
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from .models import Product
+
+
+def _product_asset_url(serializer, product, asset):
+    if not getattr(product, 'qr_code_image' if asset == 'qr' else 'product_image'):
+        return None
+    url = reverse('product-asset', kwargs={'product_id': product.product_id, 'asset': asset})
+    request = serializer.context.get('request')
+    return request.build_absolute_uri(url) if request else url
 
 
 class ProductCreateSerializer(serializers.Serializer):
@@ -22,6 +32,17 @@ class ProductCreateSerializer(serializers.Serializer):
 
 
 class ProductSerializer(serializers.ModelSerializer):
+    product_image = serializers.SerializerMethodField()
+    qr_code_image = serializers.SerializerMethodField()
+
     class Meta:
         model = Product
         fields = '__all__'
+
+    @extend_schema_field(serializers.URLField(allow_null=True))
+    def get_product_image(self, obj) -> str | None:
+        return _product_asset_url(self, obj, 'image')
+
+    @extend_schema_field(serializers.URLField(allow_null=True))
+    def get_qr_code_image(self, obj) -> str | None:
+        return _product_asset_url(self, obj, 'qr')

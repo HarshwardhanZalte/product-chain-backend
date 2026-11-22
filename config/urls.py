@@ -16,14 +16,13 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
-from django.conf import settings
-from django.conf.urls.static import static
 
 from drf_spectacular.views import (
     SpectacularAPIView,
     SpectacularSwaggerView,
     SpectacularRedocView
 )
+from users.file_views import LabCertificateView, OrganizationVerificationDocumentView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -38,6 +37,16 @@ urlpatterns = [
     path('api/labs/', include('lab.urls')),
     path('api/factories/', include('factory.urls')),
     path('api/products/', include('product.urls')),
+    path(
+        'api/private/organizations/<uuid:organization_id>/verification-document/',
+        OrganizationVerificationDocumentView.as_view(),
+        name='organization-verification-document',
+    ),
+    path(
+        'api/private/lab-tests/<uuid:test_id>/certificate/',
+        LabCertificateView.as_view(),
+        name='lab-certificate',
+    ),
 
     # OpenAPI Schema
     path(
@@ -64,6 +73,3 @@ urlpatterns = [
         name='redoc'
     ),
 ]
-
-if settings.DEBUG:
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
