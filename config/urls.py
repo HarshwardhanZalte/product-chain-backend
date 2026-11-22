@@ -24,6 +24,11 @@ from drf_spectacular.views import (
 )
 from users.file_views import LabCertificateView, OrganizationVerificationDocumentView
 
+def health_check(request):
+    from django.http import JsonResponse
+    return JsonResponse({'status': 'ok'})
+
+
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('panel/', include('admin_panel.urls')),
@@ -72,4 +77,7 @@ urlpatterns = [
         ),
         name='redoc'
     ),
+    
+    #health
+    path('health/', health_check, name='health_check'),
 ]
