@@ -1,7 +1,8 @@
 from datetime import date, time, timedelta
 from decimal import Decimal
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
@@ -12,6 +13,7 @@ from lab.models import LabProfile, LabTest
 from organization.models import BlockchainEvent, Organization
 from product.models import Product, ProductBatch
 from users.models import ActivityLog, EmailOTP, User
+from users.services import DEFAULT_OTP
 
 
 class Command(BaseCommand):
@@ -31,6 +33,8 @@ class Command(BaseCommand):
 
     @transaction.atomic
     def handle(self, *args, **options):
+        if not settings.DEBUG:
+            raise CommandError('seed_test_data is available only when DEBUG=True.')
         password = options['password']
 
         if options['clear']:
@@ -160,7 +164,7 @@ class Command(BaseCommand):
                 'description': 'Seed traceability batch',
                 'quantity': Decimal('100.000'),
                 'unit': 'kg',
-                'available_quantity': Decimal('100.000'),
+                'available_quantity': Decimal('0.000'),
                 'source_type': 'CULTIVATED',
                 'collection_date': date(2026, 10, 1),
                 'collection_time': time(8, 30),
@@ -173,8 +177,8 @@ class Command(BaseCommand):
                 'farmer': farmer_profile,
                 'current_owner': users['factory'],
                 'organization': organizations['farmer'],
-                'status': 'APPROVED',
-                'remarks': 'Approved seed batch',
+                'status': 'CONSUMED',
+                'remarks': 'Approved and consumed seed batch',
             },
         )
 
@@ -219,12 +223,29 @@ class Command(BaseCommand):
             },
         )
 
+        factory_transfer, _ = TransferEvent.objects.update_or_create(
+            event_id='00000000-0000-0000-0000-000000000006',
+            defaults={
+                'batch': approved_batch,
+                'from_party': users['collector'],
+                'to_party': users['factory'],
+                'from_organization': organizations['collector'],
+                'to_organization': organizations['factory'],
+                'quantity': Decimal('100.000'),
+                'transfer_date': date(2026, 10, 5),
+                'transfer_location': 'Seed Factory Receiving Dock',
+                'remarks': 'Seed transfer accepted by factory',
+                'status': 'ACCEPTED',
+                'recorded_by': users['collector'],
+            },
+        )
+
         approved_test, _ = LabTest.objects.update_or_create(
             test_id='00000000-0000-0000-0000-000000000002',
             defaults={
                 'batch': approved_batch,
                 'laboratory': lab_profile,
-                'submitted_by': users['lab'],
+                'submitted_by': users['collector'],
                 'reviewed_by': users['lab'],
                 'test_date': date(2026, 10, 4),
                 'test_type': 'Purity and pesticide screening',
@@ -318,7 +339,7 @@ class Command(BaseCommand):
         EmailOTP.objects.create(
             user=users['farmer'],
             purpose='VERIFY_EMAIL',
-            otp_hash=EmailOTP.hash_otp('098765'),
+            otp_hash=EmailOTP.hash_otp(DEFAULT_OTP),
             expires_at=now + timedelta(minutes=10),
             attempts=0,
             resend_available_at=now,
@@ -344,6 +365,7 @@ class Command(BaseCommand):
             ('USER_REGISTERED', 'User', users['farmer'].user_id, 'Seed farmer created'),
             ('BATCH_REGISTERED', 'HerbBatch', approved_batch.batch_id, 'Seed batch registered'),
             ('TRANSFER_ACCEPTED', 'TransferEvent', transfer.event_id, 'Seed transfer accepted'),
+            ('TRANSFER_ACCEPTED', 'TransferEvent', factory_transfer.event_id, 'Seed factory transfer accepted'),
             ('LAB_TEST_APPROVED', 'LabTest', approved_test.test_id, 'Seed test approved'),
             ('MANUFACTURING_CREATED', 'ManufacturingRecord', manufacturing_record.manufacturing_id, 'Seed manufacturing created'),
             ('PRODUCT_CREATED', 'Product', product.product_id, 'Seed product created'),
@@ -421,7 +443,10 @@ class Command(BaseCommand):
             ]
         ).delete()
         TransferEvent.objects.filter(
-            event_id='00000000-0000-0000-0000-000000000001'
+            event_id__in=[
+                '00000000-0000-0000-0000-000000000001',
+                '00000000-0000-0000-0000-000000000006',
+            ]
         ).delete()
         HerbBatch.objects.filter(batch_id__in=['ASH-2026-00001', 'ASH-2026-00002']).delete()
         User.objects.filter(pk__in=test_user_ids).delete()

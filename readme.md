@@ -29,6 +29,34 @@ The defensive security and business-logic review is in
    python manage.py runserver
    ```
 
+## Deploy to Render
+
+The root `render.yaml` defines a Render web service. Connect the repository to
+Render and deploy the Blueprint. Render uses the checked-in `.python-version`
+and `build.sh` to install dependencies, collect static files, and apply database
+migrations during the build; the service runs Django with Gunicorn. The default
+plan is Free and can spin down while idle. Select a paid plan in Render if the
+service needs to stay available continuously.
+
+Set the prompted secrets and configuration in the Render dashboard:
+
+- `SUPABASE_DATABASE_URL` and `SUPABASE_DB_POOLER` from the Supabase database
+  connection settings.
+- All five `SUPABASE_STORAGE_*` values for the private Supabase Storage bucket.
+- `EMAIL_HOST`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`, and
+  `DEFAULT_FROM_EMAIL` for your SMTP provider. The deployed service uses SMTP,
+  not the local console email backend.
+- `CORS_ALLOWED_ORIGINS` with the exact origin(s) of the frontend, including
+  `https://`. Keep `CORS_ALLOW_ALL_ORIGINS=False`.
+- `CSRF_TRUSTED_ORIGINS` only when cross-origin browser POSTs or a custom
+  domain require it; include the scheme, for example `https://...`.
+
+Render generates `DJANGO_SECRET_KEY` and provides the service hostname. Django
+uses that hostname for `ALLOWED_HOSTS`, HTTPS proxy detection, and the default
+product-verification URL. Set `DJANGO_ALLOWED_HOSTS` or
+`PRODUCT_VERIFICATION_BASE_URL` in the dashboard only when using custom domains.
+Do not upload `.env` or paste its secrets into the Blueprint file.
+
 ## Test data
 
 Create repeatable test data for users, organizations, profiles, batches, transfers,

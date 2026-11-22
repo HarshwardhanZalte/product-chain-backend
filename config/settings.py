@@ -42,8 +42,20 @@ if not SECRET_KEY:
     SECRET_KEY = 'django-insecure-local-development-key-change-before-deployment'
 
 allowed_hosts_setting = os.getenv('DJANGO_ALLOWED_HOSTS')
+render_external_hostname = os.getenv('RENDER_EXTERNAL_HOSTNAME', '').strip()
+if render_external_hostname:
+    allowed_hosts = [
+        host.strip()
+        for host in (allowed_hosts_setting or '').split(',')
+        if host.strip()
+    ]
+    if render_external_hostname not in allowed_hosts:
+        allowed_hosts.append(render_external_hostname)
+    allowed_hosts_setting = ','.join(allowed_hosts)
 if not DEBUG and not allowed_hosts_setting:
-    raise ImproperlyConfigured('DJANGO_ALLOWED_HOSTS must be configured when DEBUG is False.')
+    raise ImproperlyConfigured(
+        'DJANGO_ALLOWED_HOSTS or RENDER_EXTERNAL_HOSTNAME must be configured when DEBUG is False.'
+    )
 ALLOWED_HOSTS = [
     host.strip()
     for host in (allowed_hosts_setting or 'localhost,127.0.0.1,[::1]').split(',')
@@ -85,6 +97,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -233,6 +246,19 @@ EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
 EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', 'True').lower() == 'true'
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'noreply@example.com')
+if not DEBUG and EMAIL_BACKEND == 'django.core.mail.backends.console.EmailBackend':
+    raise ImproperlyConfigured(
+        'Configure a production email backend; console email is not suitable when DEBUG is False.'
+    )
+if not DEBUG and EMAIL_BACKEND == 'django.core.mail.backends.smtp.EmailBackend':
+    if not EMAIL_HOST or not EMAIL_HOST_USER or not EMAIL_HOST_PASSWORD:
+        raise ImproperlyConfigured(
+            'Configure EMAIL_HOST, EMAIL_HOST_USER, and EMAIL_HOST_PASSWORD for production SMTP.'
+        )
+    if not DEFAULT_FROM_EMAIL or DEFAULT_FROM_EMAIL.endswith('@example.com'):
+        raise ImproperlyConfigured(
+            'Set DEFAULT_FROM_EMAIL to a real sender address for production.'
+        )
 
 OTP_EXPIRY_MINUTES = int(os.getenv('OTP_EXPIRY_MINUTES', '10'))
 OTP_RESEND_COOLDOWN_SECONDS = int(os.getenv('OTP_RESEND_COOLDOWN_SECONDS', '60'))
@@ -248,6 +274,11 @@ SUPABASE_STORAGE_SETTINGS = {
     'access_key': os.getenv('SUPABASE_STORAGE_ACCESS_KEY_ID', '').strip(),
     'secret_key': os.getenv('SUPABASE_STORAGE_SECRET_ACCESS_KEY', '').strip(),
 }
+STATICFILES_STORAGE_BACKEND = (
+    'django.contrib.staticfiles.storage.StaticFilesStorage'
+    if DEBUG
+    else 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+)
 storage_configured = all(SUPABASE_STORAGE_SETTINGS.values())
 storage_partially_configured = any(SUPABASE_STORAGE_SETTINGS.values())
 
@@ -274,7 +305,7 @@ if storage_configured:
             },
         },
         'staticfiles': {
-            'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
+            'BACKEND': STATICFILES_STORAGE_BACKEND,
         },
     }
 else:
@@ -287,12 +318,17 @@ else:
             },
         },
         'staticfiles': {
-            'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
+            'BACKEND': STATICFILES_STORAGE_BACKEND,
         },
     }
-PRODUCT_VERIFICATION_BASE_URL = os.getenv(
-    'PRODUCT_VERIFICATION_BASE_URL',
-    'http://localhost:8000',
+default_product_verification_url = (
+    f'https://{render_external_hostname}'
+    if render_external_hostname
+    else 'http://localhost:8000'
+)
+PRODUCT_VERIFICATION_BASE_URL = (
+    os.getenv('PRODUCT_VERIFICATION_BASE_URL', '').strip()
+    or default_product_verification_url
 )
 
 STATIC_URL = '/static/'
@@ -325,6 +361,8 @@ REST_FRAMEWORK = {
 SECURE_SSL_REDIRECT = os.getenv(
     'SECURE_SSL_REDIRECT', str(not DEBUG)
 ).lower() == 'true'
+if render_external_hostname:
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 SESSION_COOKIE_SECURE = os.getenv(
     'SESSION_COOKIE_SECURE', str(not DEBUG)
 ).lower() == 'true'
@@ -360,6 +398,11 @@ CORS_ALLOWED_ORIGINS = [
         'CORS_ALLOWED_ORIGINS',
         'http://localhost:3000,http://127.0.0.1:3000',
     ).split(',')
+    if origin.strip()
+]
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',')
     if origin.strip()
 ]
 if '*' in CORS_ALLOWED_ORIGINS and not DEBUG:
