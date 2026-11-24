@@ -6,6 +6,8 @@ For the full project overview, workflows, model relationships, API reference,
 setup details, and known limitations, see [docs/PROJECT_GUIDE.md](docs/PROJECT_GUIDE.md).
 The defensive security and business-logic review is in
 [docs/SECURITY_AND_BUSINESS_GAPS.md](docs/SECURITY_AND_BUSINESS_GAPS.md).
+The backend-to-Stitch screen and API gap analysis is in
+[docs/STITCH_BACKEND_GAP_ANALYSIS.md](docs/STITCH_BACKEND_GAP_ANALYSIS.md).
 
 ## Setup
 
