@@ -61,9 +61,9 @@ Do not upload `.env` or paste its secrets into the Blueprint file.
 
 ## Test data
 
-Create repeatable test data for users, organizations, profiles, batches, transfers,
-laboratory tests, manufacturing records, products, OTP records, activity logs, and
-blockchain placeholders:
+Create repeatable test data for users, profiles, batches, transfers,
+laboratory tests, manufacturing records, products, OTP records, activity logs,
+and blockchain placeholders:
 
 ```powershell
 python manage.py seed_test_data
@@ -96,9 +96,10 @@ Normal users register and verify email with OTP, then authenticate with JWT acce
 
 When Supabase Storage is configured, uploads and generated QR images are stored
 in the configured private bucket; otherwise development uses `upload/`. Private
-organization documents and laboratory certificates are not exposed through a
-public media URL; authenticated organization members, batch participants, and
-staff can download them from the corresponding `/api/private/...` endpoints.
+laboratory certificates are not exposed through a public media URL; authorized
+batch participants and staff can download certificates through the
+`/api/private/...` endpoint. Organization onboarding and document download are
+disabled; historical organization records and links remain optional.
 Active product images and QR images are streamed through the product asset
 endpoint. Configuration and migration notes are in
 [docs/PROJECT_GUIDE.md](docs/PROJECT_GUIDE.md#configure-supabase-postgresql).

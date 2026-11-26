@@ -16,8 +16,10 @@ class FactoryProfile(models.Model):
     )
     organization = models.ForeignKey(
         Organization,
-        on_delete=models.PROTECT,
+        on_delete=models.SET_NULL,
         related_name='factories',
+        blank=True,
+        null=True,
     )
     factory_name = models.CharField(max_length=255)
     registration_number = models.CharField(max_length=100, unique=True)
@@ -49,6 +51,13 @@ class ManufacturingRecord(models.Model):
     product_name = models.CharField(max_length=255)
     process_date = models.DateField()
     process_description = models.TextField()
+    facility_line = models.CharField(max_length=255, blank=True)
+    shift = models.CharField(max_length=100, blank=True)
+    standard_operating_procedure = models.CharField(max_length=255, blank=True)
+    solvent_method = models.CharField(max_length=255, blank=True)
+    target_yield_ratio = models.CharField(max_length=50, blank=True)
+    process_parameters = models.JSONField(default=dict, blank=True)
+    quality_control_lead = models.CharField(max_length=255, blank=True)
     input_quantity = models.DecimalField(max_digits=12, decimal_places=3)
     output_quantity = models.DecimalField(max_digits=12, decimal_places=3)
     unit = models.CharField(max_length=20)

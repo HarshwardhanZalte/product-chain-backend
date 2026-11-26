@@ -17,8 +17,10 @@ class LabProfile(models.Model):
     )
     organization = models.ForeignKey(
         Organization,
-        on_delete=models.PROTECT,
+        on_delete=models.SET_NULL,
         related_name='labs',
+        blank=True,
+        null=True,
     )
     laboratory_name = models.CharField(max_length=255)
     registration_number = models.CharField(max_length=100, unique=True)
@@ -78,3 +80,33 @@ class LabTest(models.Model):
 
     class Meta:
         ordering = ('-created_at',)
+
+
+class LabMeasurement(models.Model):
+    class Verdict(models.TextChoices):
+        PASS = 'PASS', 'Pass'
+        FAIL = 'FAIL', 'Fail'
+        INCONCLUSIVE = 'INCONCLUSIVE', 'Inconclusive'
+
+    measurement_id = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
+    test = models.ForeignKey(
+        LabTest,
+        on_delete=models.CASCADE,
+        related_name='measurements',
+    )
+    analyte = models.CharField(max_length=255)
+    method = models.CharField(max_length=255, blank=True)
+    result_value = models.CharField(max_length=255)
+    numeric_value = models.DecimalField(
+        max_digits=16,
+        decimal_places=6,
+        blank=True,
+        null=True,
+    )
+    unit = models.CharField(max_length=50, blank=True)
+    threshold = models.CharField(max_length=255, blank=True)
+    verdict = models.CharField(max_length=20, choices=Verdict.choices)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ('measurement_id',)

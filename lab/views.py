@@ -1,20 +1,21 @@
 import hashlib
 
-from django.db import transaction
-from rest_framework import generics, status
+from django.db import models, transaction
+from rest_framework import filters, generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.exceptions import NotFound
 from drf_spectacular.utils import OpenApiTypes, extend_schema
 
 from farmer.models import HerbBatch
-from users.permissions import IsApprovedOrganizationUser, IsVerifiedActiveUser
-from users.services import log_activity
+from users.permissions import IsApprovedBusinessUser, IsExpectedRole, IsVerifiedActiveUser
+from users.services import log_activity, update_profile_for_review
 
-from .models import LabProfile, LabTest
+from .models import LabMeasurement, LabProfile, LabTest
 from .serializers import (
     LabTestActionSerializer,
     LabTestCreateSerializer,
+    LabTestDetailSerializer,
     LabTestResultSerializer,
     LabTestSerializer,
     LabProfileSerializer,
@@ -29,16 +30,14 @@ def is_current_test(test):
 
 
 class LabProfileView(generics.RetrieveUpdateAPIView):
-    permission_classes = (IsVerifiedActiveUser,)
+    permission_classes = (IsVerifiedActiveUser, IsExpectedRole)
+    expected_role = 'LAB'
     serializer_class = LabProfileSerializer
 
     def get_object(self):
-        if not self.request.user.organization:
-            raise NotFound('Organization is required for a laboratory profile.')
         profile, _ = LabProfile.objects.get_or_create(
             user=self.request.user,
             defaults={
-                'organization': self.request.user.organization,
                 'laboratory_name': self.request.user.name,
                 'registration_number': f'LAB-{self.request.user.user_id}',
                 'address': '',
@@ -47,6 +46,8 @@ class LabProfileView(generics.RetrieveUpdateAPIView):
         )
         return profile
 
+    def perform_update(self, serializer):
+        update_profile_for_review(serializer, self.request.user)
 
 
 class LabDashboardView(APIView):
@@ -69,7 +70,7 @@ class LabDashboardView(APIView):
 
 
 class SubmitForTestingView(APIView):
-    permission_classes = (IsApprovedOrganizationUser,)
+    permission_classes = (IsApprovedBusinessUser,)
 
     @extend_schema(request=LabTestCreateSerializer, responses={201: LabTestSerializer})
     @transaction.atomic
@@ -93,10 +94,7 @@ class SubmitForTestingView(APIView):
         laboratory = LabProfile.objects.filter(lab_id=data['laboratory_id']).first()
         if not laboratory:
             return Response({'detail': 'Laboratory not found.'}, status=404)
-        if (
-            laboratory.verification_status != 'VERIFIED'
-            or laboratory.organization.verification_status != 'VERIFIED'
-        ):
+        if laboratory.verification_status != 'VERIFIED':
             return Response({'detail': 'The laboratory is not approved to receive samples.'}, status=400)
         test = LabTest.objects.create(
             batch=batch,
@@ -114,6 +112,9 @@ class SubmitForTestingView(APIView):
 class LabRequestsView(generics.ListAPIView):
     serializer_class = LabTestSerializer
     permission_classes = (IsVerifiedActiveUser,)
+    filter_backends = (filters.SearchFilter, filters.OrderingFilter)
+    search_fields = ('test_type', 'batch__batch_id', 'batch__herb_name')
+    ordering_fields = ('status', 'test_date', 'created_at')
 
     def get_queryset(self):
         profile = getattr(self.request.user, 'lab_profile', None)
@@ -123,7 +124,7 @@ class LabRequestsView(generics.ListAPIView):
 
 
 class RecordTestResultView(APIView):
-    permission_classes = (IsApprovedOrganizationUser,)
+    permission_classes = (IsApprovedBusinessUser,)
 
     @extend_schema(request=LabTestResultSerializer, responses={200: LabTestSerializer})
     @transaction.atomic
@@ -145,6 +146,12 @@ class RecordTestResultView(APIView):
         for field in ('test_parameters', 'test_result', 'result_summary', 'remarks'):
             if field in data:
                 setattr(test, field, data[field])
+        if 'measurements' in data:
+            test.measurements.all().delete()
+            LabMeasurement.objects.bulk_create([
+                LabMeasurement(test=test, **measurement)
+                for measurement in data['measurements']
+            ])
         if 'certificate_file' in data:
             uploaded = data['certificate_file']
             uploaded.seek(0)
@@ -159,7 +166,7 @@ class RecordTestResultView(APIView):
 
 
 class ApproveTestView(APIView):
-    permission_classes = (IsApprovedOrganizationUser,)
+    permission_classes = (IsApprovedBusinessUser,)
 
     @extend_schema(request=LabTestActionSerializer, responses={200: LabTestSerializer})
     @transaction.atomic
@@ -178,7 +185,7 @@ class ApproveTestView(APIView):
         if (
             not is_current_test(test)
             or test.status != LabTest.Status.UNDER_TESTING
-            or not test.test_result.strip()
+            or not (test.test_result.strip() or test.measurements.exists())
         ):
             return Response(
                 {'detail': 'An active test with a recorded result is required for approval.'},
@@ -201,7 +208,7 @@ class ApproveTestView(APIView):
 
 
 class RejectTestView(APIView):
-    permission_classes = (IsApprovedOrganizationUser,)
+    permission_classes = (IsApprovedBusinessUser,)
 
     @extend_schema(request=LabTestActionSerializer, responses={200: LabTestSerializer})
     @transaction.atomic
@@ -235,5 +242,37 @@ class LabTestHistoryView(generics.ListAPIView):
     def get_queryset(self):
         profile = getattr(self.request.user, 'lab_profile', None)
         if profile:
-            return LabTest.objects.filter(laboratory=profile)
-        return LabTest.objects.filter(batch__farmer__user=self.request.user)
+            return LabTest.objects.filter(laboratory=profile).select_related(
+                'batch',
+                'laboratory',
+            ).prefetch_related('measurements')
+        return LabTest.objects.filter(
+            batch__farmer__user=self.request.user
+        ).select_related(
+            'batch',
+            'laboratory',
+        ).prefetch_related('measurements')
+
+
+class LabTestDetailView(generics.RetrieveAPIView):
+    serializer_class = LabTestDetailSerializer
+    permission_classes = (IsVerifiedActiveUser,)
+    lookup_field = 'test_id'
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_staff or user.role == 'ADMIN':
+            return LabTest.objects.select_related(
+                'batch',
+                'laboratory',
+                'submitted_by',
+                'reviewed_by',
+            ).prefetch_related('measurements')
+        return LabTest.objects.filter(
+            models.Q(laboratory__user=user) | models.Q(submitted_by=user)
+        ).select_related(
+            'batch',
+            'laboratory',
+            'submitted_by',
+            'reviewed_by',
+        ).prefetch_related('measurements')

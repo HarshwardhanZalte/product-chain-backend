@@ -11,15 +11,23 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from .models import ActivityLog, EmailOTP, User
 from .serializers import (
     ChangePasswordSerializer,
+    DetailResponseSerializer,
     LogoutSerializer,
     EmailSerializer,
     LoginSerializer,
+    LoginResponseSerializer,
     OTPSerializer,
+    OnboardingStatusSerializer,
     RegistrationSerializer,
     ResetPasswordSerializer,
     UserSerializer,
 )
 from .services import EmailDeliveryError, create_otp, verify_otp
+from .permissions import IsVerifiedActiveUser, has_approved_business_identity
+from farmer.serializers import FarmerProfileSerializer
+from collector.serializers import CollectorProfileSerializer
+from lab.serializers import LabProfileSerializer
+from factory.serializers import FactoryProfileSerializer
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +53,13 @@ def get_tokens(user):
 
 
 class RegisterView(APIView):
+    authentication_classes = ()
     permission_classes = (permissions.AllowAny,)
 
-    @extend_schema(request=RegistrationSerializer, responses={201: UserSerializer})
+    @extend_schema(
+        request=RegistrationSerializer,
+        responses={201: DetailResponseSerializer},
+    )
     def post(self, request):
         serializer = RegistrationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -77,6 +89,7 @@ class RegisterView(APIView):
 
 
 class SendOTPView(APIView):
+    authentication_classes = ()
     permission_classes = (permissions.AllowAny,)
 
     @extend_schema(request=EmailSerializer, responses={200: None})
@@ -103,6 +116,7 @@ class SendOTPView(APIView):
 
 
 class ResendOTPView(APIView):
+    authentication_classes = ()
     permission_classes = (permissions.AllowAny,)
 
     @extend_schema(
@@ -160,6 +174,7 @@ class ResendOTPView(APIView):
 
 
 class VerifyOTPView(APIView):
+    authentication_classes = ()
     permission_classes = (permissions.AllowAny,)
 
     @extend_schema(request=OTPSerializer, responses={200: None})
@@ -183,9 +198,13 @@ class VerifyOTPView(APIView):
 
 
 class LoginView(APIView):
+    authentication_classes = ()
     permission_classes = (permissions.AllowAny,)
 
-    @extend_schema(request=LoginSerializer, responses={200: None})
+    @extend_schema(
+        request=LoginSerializer,
+        responses={200: LoginResponseSerializer},
+    )
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -224,6 +243,7 @@ class LogoutView(APIView):
 
 
 class ForgotPasswordView(APIView):
+    authentication_classes = ()
     permission_classes = (permissions.AllowAny,)
 
     @extend_schema(request=EmailSerializer, responses={200: None})
@@ -240,6 +260,7 @@ class ForgotPasswordView(APIView):
 
 
 class ResetPasswordView(APIView):
+    authentication_classes = ()
     permission_classes = (permissions.AllowAny,)
 
     @extend_schema(request=ResetPasswordSerializer, responses={200: None})
@@ -295,3 +316,44 @@ class ChangePasswordView(APIView):
         request.user.save(update_fields=['password', 'updated_at'])
         log_activity(request, 'PASSWORD_CHANGED', 'User', request.user.user_id)
         return Response({'detail': 'Password changed successfully.'})
+
+
+class OnboardingStatusView(APIView):
+    permission_classes = (IsVerifiedActiveUser,)
+
+    @extend_schema(responses={200: OnboardingStatusSerializer})
+    def get(self, request):
+        user = request.user
+        profile_specs = {
+            User.Role.FARMER: ('farmer_profile', FarmerProfileSerializer),
+            User.Role.COLLECTOR: ('collector_profile', CollectorProfileSerializer),
+            User.Role.LAB: ('lab_profile', LabProfileSerializer),
+            User.Role.FACTORY: ('factory_profile', FactoryProfileSerializer),
+        }
+        profile_relation, profile_serializer = profile_specs.get(
+            user.role,
+            (None, None),
+        )
+        profile = getattr(user, profile_relation, None) if profile_relation else None
+        approved = has_approved_business_identity(user)
+        if not profile:
+            next_step = 'CREATE_PROFILE'
+        elif not approved:
+            next_step = 'WAIT_FOR_APPROVAL'
+        else:
+            next_step = 'READY'
+
+        payload = {
+            'role': user.role,
+            'email_verified': user.is_email_verified,
+            'role_profile': (
+                profile_serializer(profile, context={'request': request}).data
+                if profile else None
+            ),
+            'role_profile_status': (
+                profile.verification_status if profile else None
+            ),
+            'business_identity_approved': approved,
+            'next_step': next_step,
+        }
+        return Response(OnboardingStatusSerializer(payload).data)

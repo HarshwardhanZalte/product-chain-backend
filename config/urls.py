@@ -22,7 +22,8 @@ from drf_spectacular.views import (
     SpectacularSwaggerView,
     SpectacularRedocView
 )
-from users.file_views import LabCertificateView, OrganizationVerificationDocumentView
+from users.file_views import LabCertificateView
+from organization.views import BusinessParticipantListView
 
 def health_check(request):
     from django.http import JsonResponse
@@ -35,18 +36,13 @@ urlpatterns = [
 
     # Application APIs
     path('api/auth/', include('users.urls')),
-    path('api/organizations/', include('organization.urls')),
+    path('api/participants/', BusinessParticipantListView.as_view()),
     path('api/farmers/', include('farmer.urls')),
     path('api/batches/', include('farmer.urls')),
     path('api/collectors/', include('collector.urls')),
     path('api/labs/', include('lab.urls')),
     path('api/factories/', include('factory.urls')),
     path('api/products/', include('product.urls')),
-    path(
-        'api/private/organizations/<uuid:organization_id>/verification-document/',
-        OrganizationVerificationDocumentView.as_view(),
-        name='organization-verification-document',
-    ),
     path(
         'api/private/lab-tests/<uuid:test_id>/certificate/',
         LabCertificateView.as_view(),

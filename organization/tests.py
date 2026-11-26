@@ -1,10 +1,11 @@
 from django.test import TestCase
 from rest_framework.test import APIClient
 
+from collector.models import CollectorProfile
 from users.models import User
 
 
-class OrganizationOnboardingTests(TestCase):
+class OrganizationRemovalTests(TestCase):
     def setUp(self):
         self.owner = User.objects.create_user(
             email='owner@example.com',
@@ -13,54 +14,58 @@ class OrganizationOnboardingTests(TestCase):
             role='FARMER',
             is_email_verified=True,
         )
-        self.other_user = User.objects.create_user(
-            email='other@example.com',
-            password='StrongPass123',
-            name='Other Farmer',
-            role='FARMER',
-            is_email_verified=True,
-        )
         self.client = APIClient()
 
-    def test_creation_assigns_only_the_authenticated_user_and_hides_document(self):
+    def test_organization_api_is_removed(self):
         self.client.force_authenticate(self.owner)
-        response = self.client.post('/api/organizations/create/', {
-            'organization_name': 'Owner Cooperative',
-            'organization_type': 'FARMER_GROUP',
-            'registration_number': 'OWNER-ORG-001',
-            'email': 'cooperative@example.com',
-            'phone_number': '1234567890',
-            'address': 'Farm Road',
-            'state': 'State',
-            'district': 'District',
-            'pincode': '123456',
-            'verification_status': 'VERIFIED',
-        }, format='json')
-        self.assertEqual(response.status_code, 201)
-        self.assertNotIn('verification_document', response.json())
-        self.owner.refresh_from_db()
-        self.assertIsNotNone(self.owner.organization_id)
-        self.assertEqual(self.owner.organization.verification_status, 'PENDING')
-
-        self.client.force_authenticate(self.other_user)
-        detail = self.client.get(
-            f"/api/organizations/detail/{response.json()['organization_id']}/"
-        )
-        self.assertEqual(detail.status_code, 404)
-
-    def test_organization_type_must_match_account_role(self):
-        self.client.force_authenticate(self.owner)
-        response = self.client.post('/api/organizations/create/', {
-            'organization_name': 'Wrong Type',
-            'organization_type': 'MANUFACTURER',
-            'registration_number': 'OWNER-ORG-002',
-            'email': 'wrong@example.com',
-            'phone_number': '1234567890',
-            'address': 'Address',
-            'state': 'State',
-            'district': 'District',
-            'pincode': '123456',
-        }, format='json')
-        self.assertEqual(response.status_code, 400)
-        self.owner.refresh_from_db()
+        response = self.client.post('/api/organizations/create/', {}, format='json')
+        self.assertEqual(response.status_code, 404)
         self.assertIsNone(self.owner.organization_id)
+
+    def test_participant_directory_lists_verified_profiles_without_organizations(self):
+        collector = User.objects.create_user(
+            email='verified-collector@example.com',
+            password='StrongPass123',
+            name='Verified Collector',
+            role='COLLECTOR',
+            is_email_verified=True,
+        )
+        profile = CollectorProfile.objects.create(
+            user=collector,
+            collector_name='Collector Profile',
+            phone_number='1234567890',
+            address='Depot',
+            verification_status='VERIFIED',
+        )
+        unverified = User.objects.create_user(
+            email='unverified-collector@example.com',
+            password='StrongPass123',
+            name='Unverified Collector',
+            role='COLLECTOR',
+            is_email_verified=True,
+        )
+        CollectorProfile.objects.create(
+            user=unverified,
+            collector_name='Unverified Profile',
+            phone_number='1234567890',
+            address='Depot',
+            verification_status='PENDING',
+        )
+
+        self.client.force_authenticate(self.owner)
+        response = self.client.get(
+            '/api/participants/?role=COLLECTOR&search=Verified'
+        )
+
+        self.assertEqual(response.status_code, 200)
+        results = response.json()['results']
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['id'], collector.pk)
+        self.assertEqual(results[0]['user_id'], str(collector.user_id))
+        self.assertEqual(results[0]['profile_id'], str(profile.collector_id))
+        self.assertNotIn('organization_name', results[0])
+
+    def test_participant_directory_requires_a_supported_role(self):
+        self.client.force_authenticate(self.owner)
+        response = self.client.get('/api/participants/?role=ADMIN')
+        self.assertEqual(response.status_code, 400)

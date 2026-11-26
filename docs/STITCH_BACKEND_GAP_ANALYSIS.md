@@ -1,6 +1,6 @@
 # Stitch UI to Backend Gap Analysis
 
-**Review date:** 2026-11-24  
+**Review date:** 2026-11-25
 **Design source:** [Product Chain Traceability Dashboard in Google Stitch](https://stitch.google.com/projects/3137115857976930985)  
 **Scope:** Backend routes, model/schema fields, serializers and response contracts, permissions, workflow behavior, and existing tests. Frontend source code and frontend implementation were not reviewed.
 
@@ -8,17 +8,15 @@
 
 The Stitch project describes 37 screens across authentication/onboarding,
 Farmer, Collector, Lab, Factory, and public consumer verification. The backend
-already supports the main account, organization, batch, custody, testing,
-manufacturing, product, QR, and public verification workflows.
+now supports the main matching onboarding, participant discovery, harvest
+evidence, custody, laboratory measurement, manufacturing draft, product
+lineage, and public verification flows.
 
-It is **not yet a complete backend contract for the designs**. Important
-screen flows cannot reliably populate their choices or details; several
-prominent fields are not represented in the database; some list/detail
-responses expose only related database keys; and the ledger, sensor, and
-laboratory measurement content shown in the designs is not backed by equivalent
-structured data. Some such UI can be implemented with real supported data,
-but it must not present generated blockchain proofs, sensor readings,
-certification, or assay measurements as if this backend had verified them.
+The backend gaps that blocked those flows have been implemented and tested.
+The remaining differences are deliberate limits or follow-up product choices:
+there are no partial-batch transfers, EXIF/HEIC/MP4 processing, sensor or
+equipment telemetry, external certification integrations, or real blockchain
+transactions. The UI must not display invented values for those features.
 
 ## Stitch screen inventory
 
@@ -26,12 +24,12 @@ The Stitch project lists the following 37 screens:
 
 | Portal | Screens | Backend coverage at a glance |
 |---|---:|---|
-| Authentication and onboarding | 10 | Mostly covered; application status requires multiple calls and staff review |
-| Farmer | 9 | Core batch and transfer routes exist; harvest evidence and rich batch metadata are missing |
-| Collector | 6 | Core incoming/outgoing transfer routes exist; recipient discovery and transport telemetry are missing |
-| Quality Testing Lab | 4 | Request/result/status routes exist; structured assays and lab discovery are missing |
-| Factory / Processing | 6 | Manufacturing, products, and QR routes exist; process telemetry and several form fields are missing |
-| Public Consumer Verification | 2 | Public lookup and QR asset routes exist; camera scanning is a client feature and the response is less detailed than the design |
+| Authentication and onboarding | 10 | Registration, OTP, role onboarding status, and staff review are available |
+| Farmer | 9 | Batch metadata, validated field evidence uploads, and batch history are available |
+| Collector | 6 | Owned-batch visibility, verified participant discovery, and whole-batch transfer flows are available |
+| Quality Testing Lab | 4 | Verified Lab discovery, structured measurements, test detail, search, and ordering are available |
+| Factory / Processing | 6 | Typed process fields, manufacturing drafts, input lineage, product lineage, and QR are available |
+| Public Consumer Verification | 2 | Public product/source details, approved assay measurements, and product asset URLs are available; QR scanning remains client-side |
 
 The staff administration interface is not part of this 37-screen inventory.
 The backend has a session-based staff panel at `/panel/` and Django Admin at
@@ -68,13 +66,13 @@ and [product/models.py](../product/models.py).
 
 | Workflow | Available backend routes |
 |---|---|
-| Register, verify OTP, resend OTP, login, refresh/logout tokens, password reset/change, user profile | `/api/auth/` |
-| Create/read organization, current organization | `/api/organizations/` |
-| Farmer profile, dashboard, batch create/list/detail/history | `/api/farmers/` (also mounted at `/api/batches/`) |
-| Collector profile, dashboard, available batches, initiate/accept/reject transfers, transfer history | `/api/collectors/` |
-| Lab profile, dashboard, requests, submit test, record result, approve/reject, history | `/api/labs/` |
-| Factory profile/dashboard, available batches, receive transfer, create/list/read manufacturing records | `/api/factories/` |
-| Product create/list/detail, regenerate QR, public assets, public verification | `/api/products/` |
+| Register, verify OTP, resend OTP, login, refresh/logout tokens, password reset/change, user profile, onboarding summary | `/api/auth/` |
+| Create/read organization, current organization, verified participant directory (`role` and optional `search`) | `/api/organizations/` |
+| Farmer profile, dashboard, batch create/list/detail/history, batch field-evidence upload/list | `/api/farmers/` (also mounted at `/api/batches/`) |
+| Collector profile, dashboard, owned available batches, initiate/accept/reject transfers, transfer history | `/api/collectors/` |
+| Lab profile, dashboard, requests (search/order), test detail, submit test/result, approve/reject, history | `/api/labs/` |
+| Factory profile/dashboard, available batches, receive transfer, create/complete/cancel/list/read manufacturing records | `/api/factories/` |
+| Product create/list/detail, regenerate QR, public assets, enriched public verification | `/api/products/` |
 | Private organization verification document and lab certificate downloads | `/api/private/...` |
 
 Role-based business writes require a verified active account, a verified
@@ -102,21 +100,17 @@ self-service.
 
 **Gaps**
 
-- There is no single onboarding/status endpoint. A client must combine the
-  current user, organization, and role-profile calls and handle cases where an
-  organization or profile does not exist yet.
+- `GET /api/auth/onboarding/` aggregates the caller's organization, role
+  profile, verification state, and next step. A user's profile may still be
+  absent until the profile endpoint creates it.
 - The custom staff panel changes organization verification status, but does
   not provide role-profile approval actions. Profile statuses are editable in
   Django Admin; if staff review is meant to happen only in `/panel/`, add
   review actions there or add a carefully permissioned staff API.
-- The registration endpoint is documented as returning `UserSerializer`, but
-  its actual response contains a `detail` message. Correct the OpenAPI response
-  schema.
-- The debug universal OTP is `666666` in
-  [users/services.py](../users/services.py), while existing tests submit
-  `098765`. Both debug universal-OTP tests currently fail. Resolve this
-  backend behavior before relying on the OTP flow in development; the
-  universal value is debug-only.
+- Registration and login OpenAPI response schemas now match their actual
+  response bodies.
+- The debug-only universal OTP is `098765`; it is accepted only while
+  `DEBUG=True`. Normal random OTPs remain supported.
 
 ### 2. Farmer portal
 
@@ -131,13 +125,15 @@ self-service.
 
 **Gaps against the batch-entry and traceability designs**
 
-- The registration form shows plant tissue/part, cultivar/variety, quality
-  grade, packaging configuration, field/cultivation/drying observations,
-  attestations, and field photo/video evidence with EXIF verification. These
-  are not persisted by `HerbBatch`; there is no field-evidence model or
-  upload endpoint for them.
-- `description` and `remarks` are generic text fields, not validated,
-  independently queryable values for those form sections.
+- `HerbBatch` now persists plant part, cultivar, quality grade, packaging
+  details, drying notes, and the GACP attestation flag.
+- `POST` and `GET /api/farmers/batches/detail/<batch_id>/evidence/` provide
+  one-file-at-a-time evidence upload and participant-scoped listing. The
+  original Farmer can upload only before transfer; each batch is limited to
+  eight files. Uploads use existing file validation and valid-image checks.
+- EXIF extraction/verification, HEIC and video uploads, and draft batch
+  registration remain unsupported. The shared validator's file-size/type
+  limits still apply.
 - No draft batch state or save-draft operation exists. Registration creates a
   `REGISTERED` batch.
 - Registering a batch does not automatically create a Lab request. Lab
@@ -147,10 +143,8 @@ self-service.
   `approved`, and `rejected`. Recent batches, total available quantity,
   testing progress, and recent custody activity must be fetched separately or
   are unavailable.
-- Batch detail returns the `HerbBatch` serializer, not a joined traceability
-  view. History is available separately and contains a compact event timeline;
-  lab measurements, certificate metadata, and manufacturing inputs are not
-  consolidated into that response.
+- Batch detail returns the `HerbBatch` serializer; the separate history route
+  provides the compact timeline. The evidence route is separate as well.
 - The UI displays a local harvest timestamp; the model stores separate
   `DateField` and `TimeField` values without timezone/offset provenance.
 
@@ -165,16 +159,12 @@ self-service.
 
 **Gaps and blockers**
 
-- There is no public directory/search endpoint for eligible verified
-  Collectors, Factories, or Labs. The organization list only returns the
-  caller's own organization to ordinary users. The transfer screen selects a
-  verified Collector/Factory, while the transfer API requires `to_party` as a
-  user database primary key. Add a role-aware, verified-recipient lookup (or
-  equivalent) that returns stable API identifiers and display-safe fields.
-- `GET /api/collectors/available-batches/` returns all non-rejected,
-  non-consumed batches once a Collector profile exists; it is not scoped to
-  owner or organization. This is a tenant data-exposure risk and should be
-  fixed before exposing this screen to real users.
+- `GET /api/organizations/participants/?role=COLLECTOR|FACTORY|LAB&search=...`
+  returns paginated, active, email-verified users with verified organizations
+  and role profiles. It includes both the numeric user `id` expected by the
+  transfer request and UUID/profile/organization identifiers for client use.
+- `GET /api/collectors/available-batches/` is scoped to the authenticated
+  Collector's owned inventory with positive quantity and eligible status.
 - The transfer design exposes editable quantity, but transfer logic rejects
   anything other than the full available batch quantity. Either make the
   client contract explicitly whole-batch or design a real split-lot/custody
@@ -183,10 +173,8 @@ self-service.
 - Transfer records do not store carrier/vehicle, IoT sensor, route,
   temperature/humidity telemetry, seal, handover PIN/signature, or a generated
   receipt. These must not be rendered as real backend data.
-- The transfer serializer uses all model fields. Foreign keys are represented
-  by related database keys rather than nested batch/user/organization
-  summaries. The batch FK is not the human-facing `batch_id` string, so the
-  UI needs another lookup and cannot safely treat it as that identifier.
+- Transfer responses now add the human-facing batch ID, herb names, unit,
+  party names, and organization labels alongside the original model fields.
 - There is no transfer detail route; pending/history lists can be used as
   sources, but the client must handle their page shape and retrieve batch
   detail separately.
@@ -203,16 +191,14 @@ self-service.
 
 **Gaps and blockers**
 
-- There is no Lab directory/list endpoint for a Farmer or Collector to obtain
-  eligible `laboratory_id` values. The ordinary organization list cannot
-  provide it.
-- Test result measures in the design (analyte, method, observed value, unit,
-  threshold, pass/fail, instrument, calibration, signed assessor) are not
-  structured fields or a validated JSON contract. Arbitrary JSON/text does
-  not guarantee the response shape needed by assay tables or filters.
-- No individual lab-test detail route or server-side request/history filters
-  exist. The response exposes related database keys rather than a nested
-  human-readable batch identifier/profile.
+- The participant directory supplies eligible Labs and their profile and
+  organization identifiers.
+- Assay measurements are stored as structured rows with analyte, method,
+  result, optional numeric value/unit/threshold, and verdict. Tests can be
+  retrieved at `GET /api/labs/tests/<test_id>/`; request lists support
+  search/order filters.
+- Measurement data does not include instrument calibration, signed assessor,
+  or third-party LIMS/NABL verification. Lab certificate files remain private.
 - Sample custody intake, courier/seal records, chain-of-custody checklist,
   equipment telemetry, and external LIMS/NABL synchronization are not
   modeled or implemented.
@@ -235,22 +221,19 @@ self-service.
 
 **Gaps against the operations and product screens**
 
-- `ManufacturingRecord` only stores product name, process date/description,
-  summed input/output quantities, unit, status, and remarks. Facility line,
-  shift, SOP, solvent/method, target yield, temperature/pressure/flow
-  telemetry, QC reviewer, and typed process parameters are not persisted.
-- The UI's Save Draft behavior is unsupported. Manufacturing creation runs
-  immediately, marks the record completed, and consumes inputs; there are no
-  draft/start/complete/cancel endpoints.
-- `ManufacturingRecordSerializer` does not include reverse input-batch links.
-  The manufacturing detail response therefore cannot populate the selected
-  input list/quantities without another API.
+- `ManufacturingRecord` now also stores facility line, shift, SOP reference,
+  solvent/method, target yield, typed JSON process parameters, and QC lead.
+  Hardware telemetry is not generated or inferred.
+- `save_as_draft` creates a planned record without consuming inventory;
+  `/manufacturing/complete/` re-locks and revalidates the input batches before
+  consumption, and `/manufacturing/cancel/` cancels a planned draft.
+- Manufacturing responses now include nested input-batch identifiers,
+  quantities, units, and available quantities.
 - Product metadata such as expiry is supported by the separate product
   endpoint, not the manufacturing endpoint. The workflow is two-step:
   create manufacturing record, then create one or more Products.
-- Product list/detail responses omit `ProductBatch` input links. Although
-  these links exist in the database, they are not included in
-  `ProductSerializer`.
+- Product list/detail responses now include source-batch lineage and nested
+  manufacturing data.
 - Current product links copy every manufacturing input link onto each product.
   They do not calculate the actual input amount attributable to each product.
   Do not treat those amounts as per-product mass balance.
@@ -278,14 +261,10 @@ self-service.
 
 - QR camera scanning is not a backend operation. The backend supports lookup
   once the frontend has extracted a QR reference/URL.
-- Public verification does not return assay measurements, certificate
-  contents/download link, GPS coordinates, rich custody actors/signatures,
-  or a blockchain proof. The batch timeline endpoint is authenticated and is
-  not a substitute for public disclosure.
-- Product image and QR asset routes require the product UUID, while the QR
-  reference lookup response does not return it. For image display, add a
-  public asset URL to the verification response or return the needed asset
-  metadata.
+- Public verification returns assay measurements only for an approved latest
+  test and includes product UUID, image URL, and QR URL when present.
+- Certificate content/URLs, GPS coordinates, rich custody actors/signatures,
+  and blockchain proof remain intentionally excluded from public output.
 - Define a privacy-reviewed public response schema before exposing more
   farmer, location, organization, lab, or certificate information.
 
@@ -298,80 +277,76 @@ response serializers are added.
 | Endpoint | Current shape / limitation |
 |---|---|
 | `POST /api/auth/login/` | `{"user": UserSerializer, "tokens": {"access": "...", "refresh": "..."}}` |
-| `POST /api/auth/register/` | `{"detail": "Registration successful. Verify your email with the OTP."}`; OpenAPI currently claims a `UserSerializer` response |
+| `POST /api/auth/register/` | `{"detail": "Registration successful. Verify your email with the OTP."}`; documented as `DetailResponseSerializer` |
+| `GET /api/auth/onboarding/` | Aggregate current user, organization/profile state, and suggested next step |
 | Role dashboards | Role-specific flat count objects; not a common dashboard schema |
 | List endpoints | Page-number pagination, default page size 20; many list endpoints have no search/order filters |
-| Transfer list/action | `TransferEventSerializer(fields="__all__")`; related fields are database keys, not nested display objects |
-| Lab test list/action | `LabTestSerializer(fields="__all__")`; certificate file is write-only and `certificate_available` is supplied |
-| Manufacturing create/detail | `ManufacturingRecordSerializer(fields="__all__")`; reverse `input_batches` are omitted |
-| Product list/create/detail | `ProductSerializer(fields="__all__")` plus image/QR asset URLs; reverse product input links are omitted |
+| Participant directory | Paginated role-filtered records include numeric user `id`, UUID, profile, and organization display fields |
+| Transfer list/action | `TransferEventSerializer` retains model fields and adds readable batch, party, organization, and unit values |
+| Lab test list/action | `LabTestSerializer` includes structured measurements; certificate file is write-only and `certificate_available` is supplied |
+| Manufacturing create/detail | `ManufacturingRecordSerializer` includes nested input-batch data; draft creation does not reserve stock |
+| Product list/create/detail | `ProductSerializer` includes source-batch lineage and manufacturing summary |
 | Batch history | `{"batch": HerbBatchSerializer, "history": [...]}`; event entries vary by `event_type` and are not represented by a single declared event schema |
-| Public verify | `verification_status`, `product`, `manufacturing`, `input_herb_batches`; no full measurement/certificate payload |
+| Public verify | `verification_status`, `product` and asset URLs, `manufacturing`, `input_herb_batches`, and measurements for approved latest tests; certificate content remains private |
 | Factory receive | Returns `{"detail": "Batch received by factory.", "batch_id": "..."}`; OpenAPI currently documents `ReceiveBatchSerializer` as the response |
 
-Several `@extend_schema` declarations use generic `OpenApiTypes.OBJECT` or
-`responses={200: None}` for endpoints with meaningful JSON bodies. That leaves
-Swagger/OpenAPI less useful than the real responses. Make explicit response
-serializers for stable frontend integration.
+Several `@extend_schema` declarations still use generic `OpenApiTypes.OBJECT`
+or `responses={200: None}` for meaningful JSON bodies. OpenAPI generation
+validates without errors, but explicit response serializers for all remaining
+endpoints would improve client generation. Three enum-name collision warnings
+remain in schema generation.
 
-## Prioritized backend work
+## Remaining work and intentional limits
 
-### P0 — resolve before real multi-organization use
+The previously identified P0 integration blockers are addressed: Collector
+inventory is owner-scoped; verified participant discovery is available;
+transfer, lab, manufacturing, product, and onboarding responses now include
+the data needed by their corresponding screens; and structured harvest,
+evidence, assay, and manufacturing inputs are persisted.
 
-1. **Scope Collector batch visibility.** Restrict availability to an explicit
-   business rule for batches visible/transferable to that Collector. Add tests
-   proving another tenant's batches are not exposed.
-2. **Add verified participant discovery.** Provide paginated, role-filtered
-   recipient and Lab choices with stable identifiers and minimal display
-   fields. Do not expose arbitrary users or unverified organizations.
-3. **Resolve whole-batch transfer UX contract.** Keep whole-batch semantics
-   explicit or design split-batch inventory/custody in the schema first.
+The following items remain product decisions or separate integrations, not
+implemented behavior:
 
-### P1 — required for the displayed detail and data-entry flows
-
-4. Add typed harvest metadata and a field-evidence model/upload workflow for
-   photos/documents and validated metadata. Decide whether EXIF extraction is
-   actually required and define accepted media/size limits.
-5. Add structured Lab measurements and report metadata, or publish a strict
-   versioned JSON schema for `test_parameters`. Add test detail and useful
-   filters.
-6. Add typed manufacturing process/run fields and a real lifecycle if drafts,
-   process completion, QC sign-off, or telemetry are required. Otherwise
-   remove unsupported behaviors from the backend contract.
-7. Expose nested/stable response data: batch string IDs, recipient labels,
-   test summaries, manufacturing inputs, and product input links. Add detail
-   endpoints where list responses are insufficient.
-8. Correct OpenAPI responses and add response-schema tests. Include explicit
-   pagination, error/status semantics, and multipart upload definitions.
-9. Decide and document the public verification payload/privacy policy,
-   including whether product assets and certificates should be linkable
-   publicly.
-
-### P2 — quality, operations, and alignment
-
-10. Add onboarding status aggregation and/or staff review actions if the custom
-    panel is the intended approval tool. Existing model statuses can be
-    edited in Django Admin.
-11. Add dashboard aggregates/recent records and search/order filters only for
-    data the backend actually stores.
-12. Model true per-product input allocation if the product traceability screen
-    needs quantitative lineage. Keep source-batch provenance distinct from
-    measured mass balance.
-13. Fix the debug OTP constant/test mismatch (`666666` implementation versus
-    `098765` test expectation).
-14. Keep blockchain fields as placeholders until a real integration exists.
-    Never return a fabricated transaction, signature, hash, block, or
-    telemetry value to satisfy a visual element.
+1. **Partial-batch transfers.** Transfers remain whole-available-quantity
+   operations. Supporting the quantity selector as a true partial transfer
+   requires a split-lot model and custody/mass-balance rules; do not remove the
+   server-side constraint without that design.
+2. **Farmer batch drafts.** Batch registration creates a `REGISTERED` record;
+   a save-draft workflow is not implemented.
+3. **Evidence media processing.** Uploads support one validated file per
+   request, up to eight files per batch, using the existing document/image
+   validators. EXIF verification, HEIC, and video uploads are not supported.
+4. **Telemetry and external verification.** No sensor readings, equipment
+   telemetry, calibration data, external lab/certification checks, signed
+   assessor attestations, or LIMS/NABL synchronization are supplied.
+5. **Blockchain.** Existing fields/events are placeholders only; there are no
+   real transactions, signatures, proofs, or generated hashes.
+6. **Quantitative product lineage.** Product source links inherit each
+   manufacturing input link; they are provenance references, not per-product
+   ingredient allocations or mass-balance measurements.
+7. **Administration and dashboard breadth.** Profile review actions in the
+   custom `/panel/` and richer dashboard aggregates/recent-activity feeds are
+   not included in this change.
+8. **OpenAPI consistency.** Schema validation has zero errors, but some
+   endpoints still use generic response schemas, and three enum-name
+   collision warnings remain.
+9. **Public disclosure.** Public verification exposes approved assay rows and
+   limited source geography. Certificates, GPS coordinates, named custody
+   actors, signatures, and private documents remain excluded.
 
 ## Verification performed
 
-- Reviewed the Stitch page's screen inventory and backend route, view,
-  serializer, model, permission, and admin implementations.
-- `python manage.py spectacular --file ... --validate`: passed.
-- `python manage.py makemigrations --check --dry-run`: no model/migration
-  drift detected.
-- Targeted tests for the two debug universal-OTP flows: both fail because
-  responses are HTTP 400 instead of HTTP 200.
+- Added migrations for Farmer harvest/evidence fields, structured Lab
+  measurements, and Factory manufacturing process fields.
+- Full suite: **42 tests passed** using an explicitly configured in-memory
+  SQLite database and in-memory email backend. The test run did not connect
+  to Supabase.
+- `manage.py check`: passed.
+- `makemigrations --check --dry-run`: no model/migration drift detected.
+- OpenAPI generation/validation: **0 errors**, with three enum naming
+  collision warnings.
+- `git diff --check`: passed.
+- Migrations have **not** been applied to Supabase.
 - No frontend files were read, tested, or changed.
 
 For current route and business-flow details, see

@@ -9,11 +9,12 @@ from drf_spectacular.utils import OpenApiTypes, extend_schema
 
 from farmer.models import HerbBatch
 from users.permissions import (
-    IsApprovedOrganizationUser,
+    IsApprovedBusinessUser,
+    IsExpectedRole,
     IsVerifiedActiveUser,
     has_approved_business_identity,
 )
-from users.services import log_activity
+from users.services import log_activity, update_profile_for_review
 from .services import accept_transfer
 
 from .models import CollectorProfile, TransferEvent
@@ -26,16 +27,14 @@ from .serializers import (
 
 
 class CollectorProfileView(generics.RetrieveUpdateAPIView):
-    permission_classes = (IsVerifiedActiveUser,)
+    permission_classes = (IsVerifiedActiveUser, IsExpectedRole)
+    expected_role = 'COLLECTOR'
     serializer_class = CollectorProfileSerializer
 
     def get_object(self):
-        if not self.request.user.organization:
-            raise NotFound('Organization is required for a collector profile.')
         profile, _ = CollectorProfile.objects.get_or_create(
             user=self.request.user,
             defaults={
-                'organization': self.request.user.organization,
                 'collector_name': self.request.user.name,
                 'phone_number': self.request.user.phone_number,
                 'address': '',
@@ -43,6 +42,8 @@ class CollectorProfileView(generics.RetrieveUpdateAPIView):
         )
         return profile
 
+    def perform_update(self, serializer):
+        update_profile_for_review(serializer, self.request.user)
 
 
 class AvailableBatchesView(generics.ListAPIView):
@@ -52,11 +53,18 @@ class AvailableBatchesView(generics.ListAPIView):
     def get_queryset(self):
         if getattr(self.request.user, 'collector_profile', None) is None:
             return HerbBatch.objects.none()
-        return HerbBatch.objects.exclude(status='REJECTED').exclude(status='CONSUMED')
+        return HerbBatch.objects.filter(
+            current_owner=self.request.user,
+            status__in=(
+                HerbBatch.Status.WITH_COLLECTOR,
+                HerbBatch.Status.APPROVED,
+            ),
+            available_quantity__gt=0,
+        )
 
 
 class InitiateTransferView(APIView):
-    permission_classes = (IsApprovedOrganizationUser,)
+    permission_classes = (IsApprovedBusinessUser,)
 
     @extend_schema(request=TransferCreateSerializer, responses={201: TransferEventSerializer})
     @transaction.atomic
@@ -128,11 +136,17 @@ class PendingTransferView(generics.ListAPIView):
         return TransferEvent.objects.filter(
             to_party=self.request.user,
             status=TransferEvent.Status.INITIATED,
+        ).select_related(
+            'batch',
+            'from_party',
+            'to_party',
+            'from_organization',
+            'to_organization',
         )
 
 
 class AcceptTransferView(APIView):
-    permission_classes = (IsApprovedOrganizationUser,)
+    permission_classes = (IsApprovedBusinessUser,)
 
     @extend_schema(request=TransferActionSerializer, responses={200: TransferEventSerializer})
     @transaction.atomic
@@ -167,7 +181,7 @@ class AcceptTransferView(APIView):
 
 
 class RejectTransferView(APIView):
-    permission_classes = (IsApprovedOrganizationUser,)
+    permission_classes = (IsApprovedBusinessUser,)
 
     @extend_schema(request=TransferActionSerializer, responses={200: TransferEventSerializer})
     @transaction.atomic
@@ -194,7 +208,21 @@ class TransferHistoryView(generics.ListAPIView):
     def get_queryset(self):
         return TransferEvent.objects.filter(
             from_party=self.request.user
-        ) | TransferEvent.objects.filter(to_party=self.request.user)
+        ).select_related(
+            'batch',
+            'from_party',
+            'to_party',
+            'from_organization',
+            'to_organization',
+        ) | TransferEvent.objects.filter(
+            to_party=self.request.user
+        ).select_related(
+            'batch',
+            'from_party',
+            'to_party',
+            'from_organization',
+            'to_organization',
+        )
 
 
 class CollectorDashboardView(APIView):

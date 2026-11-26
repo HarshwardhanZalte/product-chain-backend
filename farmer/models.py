@@ -21,8 +21,10 @@ class FarmerProfile(models.Model):
     )
     organization = models.ForeignKey(
         Organization,
-        on_delete=models.PROTECT,
+        on_delete=models.SET_NULL,
         related_name='farmers',
+        blank=True,
+        null=True,
     )
     farmer_name = models.CharField(max_length=255)
     phone_number = models.CharField(max_length=20)
@@ -67,7 +69,13 @@ class HerbBatch(models.Model):
     batch_id = models.CharField(max_length=30, unique=True, editable=False)
     herb_name = models.CharField(max_length=255)
     botanical_name = models.CharField(max_length=255)
+    plant_part = models.CharField(max_length=100, blank=True)
+    cultivar = models.CharField(max_length=255, blank=True)
+    quality_grade = models.CharField(max_length=100, blank=True)
     description = models.TextField(blank=True)
+    packaging_details = models.CharField(max_length=255, blank=True)
+    drying_notes = models.TextField(blank=True)
+    gacp_attested = models.BooleanField(default=False)
     quantity = models.DecimalField(max_digits=12, decimal_places=3)
     unit = models.CharField(max_length=20)
     available_quantity = models.DecimalField(max_digits=12, decimal_places=3)
@@ -88,8 +96,10 @@ class HerbBatch(models.Model):
     )
     organization = models.ForeignKey(
         Organization,
-        on_delete=models.PROTECT,
+        on_delete=models.SET_NULL,
         related_name='batches',
+        blank=True,
+        null=True,
     )
     status = models.CharField(
         max_length=20,
@@ -117,3 +127,29 @@ class HerbBatch(models.Model):
 
     def __str__(self):
         return self.batch_id
+
+
+class FieldEvidence(models.Model):
+    class Kind(models.TextChoices):
+        PHOTO = 'PHOTO', 'Field photo'
+        DOCUMENT = 'DOCUMENT', 'Supporting document'
+
+    evidence_id = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
+    batch = models.ForeignKey(
+        HerbBatch,
+        on_delete=models.CASCADE,
+        related_name='field_evidence',
+    )
+    kind = models.CharField(max_length=20, choices=Kind.choices)
+    file = models.FileField(upload_to='batch_evidence/')
+    label = models.CharField(max_length=255, blank=True)
+    captured_at = models.DateTimeField(blank=True, null=True)
+    latitude = models.DecimalField(max_digits=9, decimal_places=6, blank=True, null=True)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6, blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ('created_at',)
+
+    def __str__(self):
+        return f'{self.batch.batch_id} - {self.kind}'

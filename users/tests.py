@@ -5,7 +5,10 @@ from django.core.management.base import CommandError
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from farmer.models import HerbBatch
+from collector.models import CollectorProfile
+from factory.models import FactoryProfile
+from farmer.models import FarmerProfile, HerbBatch
+from lab.models import LabProfile
 from organization.models import Organization
 
 from .models import EmailOTP, User
@@ -57,6 +60,77 @@ class AuthenticationTests(TestCase):
         }, format='json')
         self.assertEqual(response.status_code, 200)
         self.assertIn('access', response.json()['tokens'])
+
+    def test_users_can_only_create_their_own_role_profile(self):
+        farmer = User.objects.create_user(
+            email='profile-role@example.com',
+            password='StrongPass123',
+            name='Profile Role',
+            role='FARMER',
+            is_email_verified=True,
+        )
+        self.client.force_authenticate(farmer)
+
+        farmer_response = self.client.get('/api/farmers/profile/')
+        collector_response = self.client.get('/api/collectors/profile/')
+        lab_response = self.client.get('/api/labs/profile/')
+        factory_response = self.client.get('/api/factories/profile/')
+
+        self.assertEqual(farmer_response.status_code, 200)
+        self.assertEqual(collector_response.status_code, 403)
+        self.assertEqual(lab_response.status_code, 403)
+        self.assertEqual(factory_response.status_code, 403)
+        self.assertTrue(FarmerProfile.objects.filter(user=farmer).exists())
+        self.assertFalse(CollectorProfile.objects.filter(user=farmer).exists())
+        self.assertFalse(LabProfile.objects.filter(user=farmer).exists())
+        self.assertFalse(FactoryProfile.objects.filter(user=farmer).exists())
+
+    def test_login_does_not_require_csrf_for_authenticated_session(self):
+        user = User.objects.create_user(
+            email='session-login@example.com',
+            password='StrongPass123',
+            name='Session Login User',
+            role='FARMER',
+            organization=self.organization,
+            is_email_verified=True,
+        )
+        client = APIClient(enforce_csrf_checks=True)
+        client.force_login(user)
+
+        response = client.post(
+            '/api/auth/login/',
+            {'email': user.email, 'password': 'StrongPass123'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertIn('access', response.json()['tokens'])
+
+    def test_registration_does_not_require_csrf_for_authenticated_session(self):
+        session_user = User.objects.create_user(
+            email='session-registration@example.com',
+            password='StrongPass123',
+            name='Session User',
+            role='FARMER',
+            organization=self.organization,
+            is_email_verified=True,
+        )
+        client = APIClient(enforce_csrf_checks=True)
+        client.force_login(session_user)
+
+        response = client.post(
+            '/api/auth/register/',
+            {
+                'name': 'New Farmer',
+                'email': 'new-farmer@example.com',
+                'phone_number': '1234567890',
+                'password': 'StrongPass123',
+                'role': 'FARMER',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 201, response.data)
 
     @override_settings(DEBUG=True)
     def test_default_otp_verifies_email_in_debug(self):
@@ -211,6 +285,23 @@ class AuthenticationTests(TestCase):
             format='json',
         )
         self.assertEqual(cooldown.status_code, 429)
+
+    def test_onboarding_status_starts_with_role_profile_without_organization(self):
+        user = User.objects.create_user(
+            email='onboarding-status@example.com',
+            password='StrongPass123',
+            name='Onboarding Status',
+            role='FARMER',
+            is_email_verified=True,
+        )
+        self.client.force_authenticate(user)
+
+        response = self.client.get('/api/auth/onboarding/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['next_step'], 'CREATE_PROFILE')
+        self.assertNotIn('organization', response.data)
+        self.assertIsNone(response.data['role_profile'])
 
         user.is_email_verified = True
         user.save(update_fields=['is_email_verified'])

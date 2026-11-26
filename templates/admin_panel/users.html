@@ -1,7 +1,125 @@
-{% extends "admin_panel/base.html" %}{% block content %}
-<h1 class="h3">Users</h1>
-<form class="row g-2 mb-3"><div class="col"><input class="form-control" name="q" value="{{ request.GET.q }}" placeholder="Search users"></div><div class="col-auto"><button class="btn btn-primary">Search</button></div></form>
-<table class="table table-striped bg-white"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Verified</th><th>Active</th><th>Action</th></tr></thead><tbody>
-{% for item in page_obj %}<tr><td>{{ item.name }}</td><td>{{ item.email }}</td><td>{{ item.role }}</td><td>{{ item.is_email_verified|yesno:"Yes,No" }}</td><td>{{ item.is_active|yesno:"Yes,No" }}</td><td><form method="post">{% csrf_token %}<input type="hidden" name="user_id" value="{{ item.pk }}"><select name="role">{% for value,label in roles %}<option value="{{ value }}" {% if item.role == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select><button class="btn btn-sm btn-outline-primary" name="is_active" value="{% if item.is_active %}false{% else %}true{% endif %}">{% if item.is_active %}Deactivate{% else %}Activate{% endif %}</button></form></td></tr>{% endfor %}
-</tbody></table>{% include "admin_panel/pagination.html" %}
+{% extends "admin_panel/base.html" %}
+{% block title %}User verification | Herb Traceability{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <h1>User verification</h1>
+  <p>Review role profiles after the user verifies their email. Approval enables the user’s role-specific business workflows.</p>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-sm-4">
+    <div class="card stat-card">
+      <div class="stat-label">Total accounts</div>
+      <div class="stat-value">{{ total_users }}</div>
+    </div>
+  </div>
+  <div class="col-sm-4">
+    <a class="card stat-card" href="{% url 'admin_users' %}?status=PENDING">
+      <div class="stat-label"><span class="stat-indicator stat-amber"></span>Pending role reviews</div>
+      <div class="stat-value">{{ pending_role_reviews }}</div>
+    </a>
+  </div>
+  <div class="col-sm-4">
+    <a class="card stat-card" href="{% url 'admin_users' %}?email=unverified">
+      <div class="stat-label"><span class="stat-indicator stat-blue"></span>Email OTP pending</div>
+      <div class="stat-value">{{ email_verification_pending }}</div>
+    </a>
+  </div>
+</div>
+
+<section class="card">
+  <div class="card-body">
+    <form method="get" class="row g-2 align-items-end">
+      <div class="col-lg-4">
+        <label class="form-label small fw-semibold" for="user-search">Search</label>
+        <input id="user-search" class="form-control" name="q" value="{{ request.GET.q }}" placeholder="Name, email, phone or profile name">
+      </div>
+      <div class="col-sm-6 col-lg-2">
+        <label class="form-label small fw-semibold" for="role-filter">Role</label>
+        <select id="role-filter" class="form-select" name="role">
+          <option value="">All roles</option>
+          {% for value,label in roles %}
+            <option value="{{ value }}" {% if request.GET.role == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-sm-6 col-lg-3">
+        <label class="form-label small fw-semibold" for="status-filter">Profile review</label>
+        <select id="status-filter" class="form-select" name="status">
+          <option value="">All statuses</option>
+          {% for value,label in status_options %}
+            <option value="{{ value }}" {% if request.GET.status == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-sm-6 col-lg-2">
+        <label class="form-label small fw-semibold" for="email-filter">Email OTP</label>
+        <select id="email-filter" class="form-select" name="email">
+          <option value="">All</option>
+          <option value="verified" {% if request.GET.email == "verified" %}selected{% endif %}>Verified</option>
+          <option value="unverified" {% if request.GET.email == "unverified" %}selected{% endif %}>Pending</option>
+        </select>
+      </div>
+      <div class="col-sm-6 col-lg-1 d-grid">
+        <button class="btn btn-primary" type="submit">Filter</button>
+      </div>
+      <div class="col-12"><a class="small text-decoration-none" href="{% url 'admin_users' %}">Clear filters</a></div>
+    </form>
+  </div>
+
+  <div class="table-responsive">
+    <table class="table">
+      <thead>
+        <tr><th>User</th><th>Role</th><th>Email OTP</th><th>Role profile</th><th>Account</th><th>Joined</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for item in page_obj %}
+          <tr>
+            <td>
+              <div class="user-chip">
+                <span class="user-avatar">{{ item.name|first|upper }}</span>
+                <span><strong class="d-block">{{ item.name }}</strong><small class="text-muted">{{ item.email }}</small></span>
+              </div>
+            </td>
+            <td>{{ item.get_role_display }}</td>
+            <td>
+              {% if item.is_email_verified %}
+                <span class="status-badge status-approved">Verified</span>
+              {% else %}
+                <span class="status-badge status-pending">Email pending</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if item.verification_status == "PENDING" %}
+                <span class="status-badge status-pending">Pending review</span>
+              {% elif item.verification_status == "VERIFIED" %}
+                <span class="status-badge status-approved">Approved</span>
+              {% elif item.verification_status == "REJECTED" %}
+                <span class="status-badge status-rejected">Rejected</span>
+              {% elif item.verification_status == "MISSING" %}
+                <span class="status-badge status-neutral">Profile missing</span>
+              {% elif item.verification_status == "NOT_REQUIRED" %}
+                <span class="status-badge status-neutral">Not applicable</span>
+              {% else %}
+                <span class="status-badge status-neutral">{{ item.verification_status|title }}</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if item.is_active %}
+                <span class="status-badge status-approved">Active</span>
+              {% else %}
+                <span class="status-badge status-neutral">Inactive</span>
+              {% endif %}
+            </td>
+            <td class="text-nowrap">{{ item.date_joined|date:"M j, Y" }}</td>
+            <td class="text-end"><a class="btn btn-sm btn-outline-primary" href="{% url 'admin_user_detail' item.user_id %}">Review</a></td>
+          </tr>
+        {% empty %}
+          <tr><td class="py-5 text-center text-muted" colspan="7">No users match these filters.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="card-body border-top">{% include "admin_panel/pagination.html" %}</div>
+</section>
 {% endblock %}

@@ -110,3 +110,26 @@ class LabWorkflowTests(TestCase):
             'test_date': '2026-11-20',
         }, format='json')
         self.assertEqual(response.status_code, 400)
+
+    def test_submit_result_persists_structured_assay_measurements(self):
+        response = self.client.post('/api/labs/submit-result/', {
+            'test_id': str(self.test.test_id),
+            'measurements': [{
+                'analyte': 'Withanolide content',
+                'method': 'HPLC',
+                'result_value': '5.82',
+                'numeric_value': '5.820000',
+                'unit': '% w/w',
+                'threshold': '>= 2.50',
+                'verdict': 'PASS',
+            }],
+        }, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['measurements'][0]['analyte'], 'Withanolide content')
+        self.assertEqual(response.data['measurements'][0]['verdict'], 'PASS')
+
+        detail = self.client.get(f'/api/labs/tests/{self.test.test_id}/')
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.data['batch_id'], self.batch.batch_id)
+        self.assertEqual(detail.data['laboratory_name'], self.lab_profile.laboratory_name)
+        self.assertEqual(len(detail.data['measurements']), 1)

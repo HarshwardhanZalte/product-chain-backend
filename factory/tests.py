@@ -190,3 +190,60 @@ class ManufacturingTests(TestCase):
             'transfer_location': 'Factory',
         }, format='json')
         self.assertEqual(response.status_code, 400)
+
+    def test_manufacturing_draft_does_not_consume_stock_until_completed(self):
+        draft = self.client.post('/api/factories/manufacturing/create/', {
+            'product_name': 'Herb Extract',
+            'process_date': '2026-11-19',
+            'process_description': 'Hydro-ethanolic extraction',
+            'facility_line': 'Extraction line 2',
+            'shift': 'Morning',
+            'standard_operating_procedure': 'SOP-04',
+            'solvent_method': 'Water and ethanol',
+            'target_yield_ratio': '5:1',
+            'process_parameters': {'temperature_c': '45.2'},
+            'quality_control_lead': 'Dr. Example',
+            'output_quantity': '8.000',
+            'unit': 'kg',
+            'save_as_draft': True,
+            'input_batches': [{
+                'batch_id': self.batch.batch_id,
+                'quantity_used': '4.000',
+            }],
+        }, format='json')
+        self.assertEqual(draft.status_code, 201)
+        self.assertEqual(draft.data['status'], 'PLANNED')
+        self.assertEqual(draft.data['input_batches'][0]['batch_id'], self.batch.batch_id)
+        self.batch.refresh_from_db()
+        self.assertEqual(str(self.batch.available_quantity), '10.000')
+
+        complete = self.client.post('/api/factories/manufacturing/complete/', {
+            'manufacturing_id': draft.data['manufacturing_id'],
+        }, format='json')
+        self.assertEqual(complete.status_code, 200)
+        self.assertEqual(complete.data['status'], 'COMPLETED')
+        self.batch.refresh_from_db()
+        self.assertEqual(str(self.batch.available_quantity), '6.000')
+
+    def test_manufacturing_draft_can_be_cancelled_without_consuming_stock(self):
+        draft = self.client.post('/api/factories/manufacturing/create/', {
+            'product_name': 'Herb Extract',
+            'process_date': '2026-11-19',
+            'process_description': 'Extraction',
+            'output_quantity': '8.000',
+            'unit': 'kg',
+            'save_as_draft': True,
+            'input_batches': [{
+                'batch_id': self.batch.batch_id,
+                'quantity_used': '4.000',
+            }],
+        }, format='json')
+        self.assertEqual(draft.status_code, 201)
+
+        cancelled = self.client.post('/api/factories/manufacturing/cancel/', {
+            'manufacturing_id': draft.data['manufacturing_id'],
+        }, format='json')
+        self.assertEqual(cancelled.status_code, 200)
+        self.assertEqual(cancelled.data['status'], 'CANCELLED')
+        self.batch.refresh_from_db()
+        self.assertEqual(str(self.batch.available_quantity), '10.000')

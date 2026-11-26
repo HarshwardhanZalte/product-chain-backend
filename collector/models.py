@@ -16,8 +16,10 @@ class CollectorProfile(models.Model):
     )
     organization = models.ForeignKey(
         Organization,
-        on_delete=models.PROTECT,
+        on_delete=models.SET_NULL,
         related_name='collectors',
+        blank=True,
+        null=True,
     )
     collector_name = models.CharField(max_length=255)
     phone_number = models.CharField(max_length=20)
@@ -48,13 +50,17 @@ class TransferEvent(models.Model):
     )
     from_organization = models.ForeignKey(
         Organization,
-        on_delete=models.PROTECT,
+        on_delete=models.SET_NULL,
         related_name='outgoing_transfers',
+        blank=True,
+        null=True,
     )
     to_organization = models.ForeignKey(
         Organization,
-        on_delete=models.PROTECT,
+        on_delete=models.SET_NULL,
         related_name='incoming_transfers',
+        blank=True,
+        null=True,
     )
     quantity = models.DecimalField(max_digits=12, decimal_places=3)
     transfer_date = models.DateField()
