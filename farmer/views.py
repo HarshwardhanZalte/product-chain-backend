@@ -2,7 +2,7 @@ from datetime import date
 
 from django.db import transaction
 from django.db import models
-from rest_framework import filters, generics, status
+from rest_framework import filters, generics, permissions, status
 from rest_framework.exceptions import NotFound
 from drf_spectacular.utils import OpenApiTypes, extend_schema
 from rest_framework.parsers import FormParser, MultiPartParser

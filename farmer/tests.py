@@ -66,6 +66,28 @@ class FarmerBatchTests(TestCase):
         self.assertEqual(batch.available_quantity, batch.quantity)
         self.assertTrue(batch.batch_id.startswith('ASH-'))
 
+    def test_batch_detail_is_readable_without_mutation_permissions(self):
+        created = self.client.post('/api/farmers/batches/register/', {
+            'herb_name': 'Ashwagandha',
+            'botanical_name': 'Withania somnifera',
+            'quantity': '10.000',
+            'unit': 'kg',
+            'source_type': 'CULTIVATED',
+            'collection_date': '2026-11-19',
+            'collection_time': '10:30:00',
+            'collection_address': 'Farm',
+            'village': 'Village',
+            'district': 'District',
+            'state': 'State',
+        }, format='json')
+        self.assertEqual(created.status_code, 201, created.data)
+
+        response = self.client.get(
+            f"/api/farmers/batches/detail/{created.data['batch_id']}/"
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+
     def test_batch_registration_requires_approved_profile_but_not_organization(self):
         response_data = {
             'herb_name': 'Ashwagandha',
