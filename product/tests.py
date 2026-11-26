@@ -1,13 +1,18 @@
+from unittest.mock import patch
+
+import qrcode
 from django.test import TestCase
+from django.test import override_settings
 from rest_framework.test import APIClient
 
 from .models import Product
 from factory.models import FactoryProfile, ManufacturingBatch, ManufacturingRecord
 from farmer.models import FarmerProfile, HerbBatch
-from lab.models import LabProfile, LabTest
+from lab.models import LabMeasurement, LabProfile, LabTest
 from organization.models import Organization
 from users.models import User
 from .models import ProductBatch
+from .views import generate_product_qr
 
 
 class PublicVerificationTests(TestCase):
@@ -105,8 +110,26 @@ class PublicVerificationTests(TestCase):
 
         self.lab_test.status = LabTest.Status.APPROVED
         self.lab_test.save(update_fields=['status'])
+        LabMeasurement.objects.create(
+            test=self.lab_test,
+            analyte='Withanolide content',
+            method='HPLC',
+            result_value='5.82',
+            numeric_value='5.82',
+            unit='% w/w',
+            threshold='>= 2.50',
+            verdict=LabMeasurement.Verdict.PASS,
+        )
         response = client.get(f'/api/products/verify/{self.product.qr_reference}/')
         self.assertEqual(response.json()['verification_status'], 'VERIFIED')
+        self.assertEqual(
+            response.json()['input_herb_batches'][0]['lab_measurements'][0]['analyte'],
+            'Withanolide content',
+        )
+        self.assertEqual(
+            response.json()['product']['product_id'],
+            str(self.product.product_id),
+        )
 
     def test_product_allocations_cannot_exceed_manufacturing_output(self):
         client = APIClient()
@@ -121,3 +144,27 @@ class PublicVerificationTests(TestCase):
             'unit': 'kg',
         }, format='json')
         self.assertEqual(response.status_code, 400)
+
+
+    def test_generated_qr_points_to_frontend_verification_page_when_configured(self):
+        payloads = []
+        original_add_data = qrcode.QRCode.add_data
+
+        def capture_payload(qr, data, optimize=20):
+            payloads.append(data)
+            return original_add_data(qr, data, optimize)
+
+        with (
+            override_settings(
+                PRODUCT_VERIFICATION_FRONTEND_URL='https://trace.example',
+                PRODUCT_VERIFICATION_BASE_URL='https://api.example',
+            ),
+            patch('qrcode.QRCode.add_data', capture_payload),
+            patch.object(self.product.qr_code_image, 'save'),
+        ):
+            generate_product_qr(self.product)
+
+        self.assertEqual(
+            payloads,
+            [f'https://trace.example/verify/{self.product.qr_reference}/'],
+        )

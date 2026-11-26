@@ -2,7 +2,58 @@ from django.urls import reverse
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
-from .models import Product
+from factory.models import ManufacturingRecord
+from .models import Product, ProductBatch
+
+
+class ProductSourceBatchSerializer(serializers.ModelSerializer):
+    batch_id = serializers.CharField(source='herb_batch.batch_id', read_only=True)
+    herb_name = serializers.CharField(source='herb_batch.herb_name', read_only=True)
+    botanical_name = serializers.CharField(
+        source='herb_batch.botanical_name',
+        read_only=True,
+    )
+    village = serializers.CharField(source='herb_batch.village', read_only=True)
+    district = serializers.CharField(source='herb_batch.district', read_only=True)
+    state = serializers.CharField(source='herb_batch.state', read_only=True)
+    harvest_date = serializers.DateField(
+        source='herb_batch.collection_date',
+        read_only=True,
+    )
+
+    class Meta:
+        model = ProductBatch
+        fields = (
+            'batch_id',
+            'herb_name',
+            'botanical_name',
+            'village',
+            'district',
+            'state',
+            'harvest_date',
+        )
+
+
+class ProductManufacturingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ManufacturingRecord
+        fields = (
+            'manufacturing_id',
+            'product_name',
+            'process_date',
+            'process_description',
+            'facility_line',
+            'shift',
+            'standard_operating_procedure',
+            'solvent_method',
+            'target_yield_ratio',
+            'process_parameters',
+            'quality_control_lead',
+            'input_quantity',
+            'output_quantity',
+            'unit',
+            'status',
+        )
 
 
 def _product_asset_url(serializer, product, asset):
@@ -34,6 +85,15 @@ class ProductCreateSerializer(serializers.Serializer):
 class ProductSerializer(serializers.ModelSerializer):
     product_image = serializers.SerializerMethodField()
     qr_code_image = serializers.SerializerMethodField()
+    source_batches = ProductSourceBatchSerializer(
+        source='input_batches',
+        many=True,
+        read_only=True,
+    )
+    manufacturing = ProductManufacturingSerializer(
+        source='manufacturing_record',
+        read_only=True,
+    )
 
     class Meta:
         model = Product

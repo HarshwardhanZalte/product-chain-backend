@@ -12,7 +12,7 @@ The backend records the provenance and custody of herb batches through the
 following chain:
 
 ```text
-Account and organization onboarding
+Account and role-profile onboarding
   -> farmer registers a herb batch
   -> batch is tested by a laboratory
   -> farmer/collector transfers custody to collector/factory
@@ -41,7 +41,7 @@ database state and is not an independent certification.
 | App | Owns |
 |---|---|
 | `users` | Custom email-based user, OTP records, activity logs, authentication, private file downloads, seed command |
-| `organization` | Organizations and generic blockchain placeholders |
+| `organization` | Legacy organization records and generic blockchain placeholders; organization onboarding/API is disabled |
 | `farmer` | Farmer profiles, herb batches, batch registration and history |
 | `collector` | Collector profiles, transfer events and custody transition service |
 | `lab` | Lab profiles, tests, results and certificates |
@@ -58,10 +58,10 @@ alias, not a second implementation.
 
 | Role | Main responsibilities |
 |---|---|
-| `FARMER` | Create an organization/profile, register batches, submit owned batches for lab testing, transfer batches to collectors |
-| `COLLECTOR` | Create an organization/profile, receive transfers, submit owned batches for testing, transfer approved batches to factories |
-| `LAB` | Create an organization/profile, receive tests, record results, approve or reject tests assigned to its lab profile |
-| `FACTORY` | Create an organization/profile, accept addressed transfers, consume eligible input batches, create products and QR codes |
+| `FARMER` | Complete a farmer profile, register batches, submit owned batches for lab testing, transfer batches to collectors |
+| `COLLECTOR` | Complete a collector profile, receive transfers, submit owned batches for testing, transfer approved batches to factories |
+| `LAB` | Complete a lab profile, receive tests, record results, approve or reject tests assigned to its lab profile |
+| `FACTORY` | Complete a factory profile, accept addressed transfers, consume eligible input batches, create products and QR codes |
 | `ADMIN` | Administrative role; public signup cannot create it. Staff/superuser privileges are used for administrative interfaces and actions. |
 
 There are two important API permission levels:
@@ -69,13 +69,12 @@ There are two important API permission levels:
 1. **Verified active account:** the user is authenticated, active, and has a
    verified email. This is used for read access, profile onboarding, and some
    account operations.
-2. **Approved business identity:** all of the above, plus an organization with
-   `verification_status=VERIFIED` and the role-matching profile with
-   `verification_status=VERIFIED`. This is required for core business writes.
+2. **Approved role profile:** all of the above, plus the role-matching profile
+   with `verification_status=VERIFIED`. This is required for core business writes.
 
 Profile endpoints may create a missing profile on `GET`. Newly created profiles
-default to `PENDING`; staff must approve the organization and role-matching
-profile before the user can perform gated business operations. Profiles cannot
+default to `PENDING`; staff must approve the role-matching profile before the
+user can perform gated business operations. Profiles cannot
 self-set their verification status through the profile serializer. The farmer
 profile update explicitly checks for the farmer role; collector, lab, and
 factory profile endpoints rely on authentication/email verification and do not
@@ -84,15 +83,14 @@ Treat these as self-profile setup endpoints, not role authorization.
 
 Object scoping is endpoint-specific:
 
-- Organization reads are limited to organization members and staff; organization
-  updates require staff/admin permission.
-- Farmers see their own batches; other authenticated business users see batches
-  in their organization on farmer batch-list/detail routes.
+- Organization creation, assignment, management, and verification flows are
+  disabled. Historical organization records and their optional foreign-key
+  associations are retained for existing data, but do not gate access.
+- Farmers see their own batches; other business users see batches currently
+  owned by them on farmer batch-list/detail routes.
 - The collector available-batch endpoint currently returns all non-rejected,
   non-consumed batches when the caller has a collector profile; its queryset
-  does not filter by organization or current owner. This is broader than
-  organization-scoped visibility and should not be treated as a tenant-isolated
-  inventory view.
+  is scoped to the current owner.
 - Transfers are visible to their sender or recipient.
 - Lab tests are restricted to the assigned lab for lab operations.
 - Manufacturing records and products are scoped to the user's factory profile,
@@ -100,9 +98,8 @@ Object scoping is endpoint-specific:
 - Batch history is available to staff and users recorded as a batch participant
   (owner, farmer, transfer party, lab, manufacturing factory, or product
   manufacturer).
-- Private organization documents and lab certificates require authentication
-  and participant/member or staff access. Unauthorized private-file requests
-  return not found.
+- Private lab certificates require authentication and batch participant or
+  staff access. Unauthorized private-file requests return not found.
 
 ## 4. Local setup and operations
 
@@ -137,7 +134,6 @@ before relying on delivery outside local development.
 | `http://localhost:8000/api/redoc/` | ReDoc |
 | `http://localhost:8000/api/schema/` | OpenAPI schema |
 | `/api/products/verify/<qr_reference>/` | Public product traceability response |
-| `/api/private/organizations/<organization_id>/verification-document/` | Authenticated organization document download |
 | `/api/private/lab-tests/<test_id>/certificate/` | Authenticated lab certificate download |
 
 The Django admin and custom panel are separate interfaces. Both require staff
@@ -156,7 +152,7 @@ The names and local examples are in [.env.example](../.env.example).
 | Email | `EMAIL_BACKEND`, `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`, `EMAIL_USE_TLS`, `DEFAULT_FROM_EMAIL` |
 | OTP | `OTP_EXPIRY_MINUTES`, `OTP_RESEND_COOLDOWN_SECONDS`, `OTP_MAX_ATTEMPTS` |
 | JWT | `JWT_ACCESS_LIFETIME_MINUTES`, `JWT_REFRESH_LIFETIME_DAYS` |
-| Media/QR | `MEDIA_URL`, `PRODUCT_VERIFICATION_BASE_URL` |
+| Media/QR | `MEDIA_URL`, `PRODUCT_VERIFICATION_BASE_URL`, `PRODUCT_VERIFICATION_FRONTEND_URL` |
 | Cross-origin API | `CORS_ALLOWED_ORIGINS`, `CORS_ALLOW_ALL_ORIGINS` |
 | Throttling | `API_ANON_THROTTLE`, `API_USER_THROTTLE` |
 | HTTPS deployment | `SECURE_SSL_REDIRECT`, `SESSION_COOKIE_SECURE`, `CSRF_COOKIE_SECURE`, `SECURE_HSTS_SECONDS`, `SECURE_HSTS_INCLUDE_SUBDOMAINS`, `SECURE_HSTS_PRELOAD` |
@@ -200,9 +196,8 @@ database URL overrides the existing `POSTGRES_*` development configuration.
 ### Configure Supabase Storage
 
 1. Create a **private** bucket in Supabase Storage before starting the app.
-   Use one bucket for organization documents, lab certificates, product images,
-   and QR images, unless the deployment has a deliberate reason to separate
-   them.
+   Use one bucket for lab certificates, product images, and QR images, unless
+   the deployment has a deliberate reason to separate them.
 2. In **Storage → S3 configuration**, copy the exact endpoint and region. Set
    `SUPABASE_STORAGE_ENDPOINT` and `SUPABASE_STORAGE_REGION` from that page;
    do not guess/build the endpoint.
@@ -218,8 +213,10 @@ non-overwriting object names. Keep the bucket private. S3 credentials have
 privileged access and bypass Supabase Storage RLS, so they must only be
 available to the server through environment secrets; never put them in the
 browser or frontend. Product images and QR codes are streamed through the
-existing application asset endpoint, and organization documents/certificates
-are streamed through authenticated participant-only endpoints.
+existing application asset endpoint, and lab certificates are streamed through
+authenticated participant-only endpoints. Historical organization documents,
+if present, are retained in storage but no longer have an application download
+endpoint.
 
 Official references: [Supabase PostgreSQL connections](https://supabase.com/docs/guides/database/connecting-to-postgres),
 [Supabase S3 authentication](https://supabase.com/docs/guides/storage/s3/authentication),
@@ -227,7 +224,7 @@ and [Django-storages S3 backend](https://django-storages.readthedocs.io/en/lates
 
 ## 5. Business logic and end-to-end flows
 
-### 5.1 Account registration, organization, and profile onboarding
+### 5.1 Account registration and role-profile onboarding
 
 1. A user registers with name, email, password, optional phone number, and one
    non-admin role.
@@ -237,45 +234,28 @@ and [Django-storages S3 backend](https://django-storages.readthedocs.io/en/lates
    and password-reset OTPs are separate by purpose. Resending applies a
    cooldown; verification applies expiry and a maximum number of attempts.
 4. The user verifies email and can then log in for JWT tokens.
-5. A verified user creates an organization through
-   `POST /api/organizations/create/`. The organization type must match the
-   user's role, it starts `PENDING`, and it is assigned to that user inside the
-   same database transaction. A user already assigned to an organization
-   cannot create another through this endpoint.
-6. The user visits their role profile endpoint. If no profile exists, the
-   endpoint creates one with `PENDING` verification status and sensible
-   account-derived defaults; the user can then complete editable profile
-   fields.
-7. Staff review and approve organization/profile records. Until both are
-   verified, core business writes are denied. Onboarding reads and profile
-   completion remain possible before approval.
-
-The role-to-organization type mapping is:
-
-| User role | Organization type |
-|---|---|
-| `FARMER` | `FARMER_GROUP` |
-| `COLLECTOR` | `COLLECTOR` |
-| `LAB` | `TESTING_LAB` |
-| `FACTORY` | `MANUFACTURER` |
-
-`OTHER` is a model organization type but is not accepted by this self-service
-onboarding mapping.
+5. After email verification, the user completes the role-specific profile
+   directly. Profile endpoints create a missing profile with `PENDING`
+   verification status and sensible account-derived defaults.
+6. Staff review and approve the role profile. Core business writes require an
+   active, email-verified account and an approved role profile.
+7. Organization creation and assignment are not part of registration or
+   onboarding. Historical organization data and links remain optional and are
+   not required by business workflows.
 
 ### 5.2 Batch registration and custody
 
-1. An approved farmer submits herb, botanical name, amount, unit, source type,
+1. A farmer with an approved role profile submits herb, botanical name, amount, unit, source type,
    collection date/time, and origin details.
-2. The server assigns a unique batch identifier, farmer profile, organization,
-   current owner, initial `available_quantity` equal to `quantity`, and initial
+2. The server assigns a unique batch identifier, farmer profile, current owner,
+   initial `available_quantity` equal to `quantity`, and initial
    status `REGISTERED`. Client input cannot set ownership, available amount, or
    status.
 3. The farmer may edit source information only while the batch is in
    `REGISTERED` or `COLLECTED`.
 4. An approved current owner initiates a transfer. Allowed handoff roles are
    farmer to collector and collector to factory. The recipient must be an
-   active, email-verified user with an approved organization and matching
-   verified profile.
+   active, email-verified user with an approved role profile.
 5. Until acceptance, the sender remains `current_owner`. The recipient accepts
    or rejects the pending event. Acceptance locks and rechecks the batch's
    owner, status, available amount, event recipient, and (for factory-bound
@@ -303,24 +283,7 @@ workflow. Use actual IDs returned by earlier requests; user `to_party` is the
 database primary key, while organization, lab, product, and manufacturing IDs
 are UUID values.
 
-Create a farmer-group organization after verifying email:
-
-```json
-{
-  "organization_name": "Example Herb Cooperative",
-  "organization_type": "FARMER_GROUP",
-  "registration_number": "FARM-EXAMPLE-001",
-  "email": "cooperative@example.com",
-  "phone_number": "9000000000",
-  "address": "Farm Road",
-  "state": "Maharashtra",
-  "district": "Pune",
-  "pincode": "411001"
-}
-```
-
-Register a batch after completing and obtaining approval for the farmer
-profile and organization:
+Register a batch after completing and obtaining approval for the farmer profile:
 
 ```json
 {
@@ -480,8 +443,10 @@ semantics; the manufacturing output is an operator-entered recorded value.
    already linked to it are summed. The new product cannot make total allocated
    product quantity exceed that record's `output_quantity`.
 3. The product is linked to every manufacturing input herb batch. A random QR
-   reference is assigned, and a PNG QR image points at
-   `<PRODUCT_VERIFICATION_BASE_URL>/api/products/verify/<qr_reference>/`.
+   reference is assigned. If `PRODUCT_VERIFICATION_FRONTEND_URL` is configured,
+   the PNG points to its `/verify/<qr_reference>/` route; otherwise it retains
+   the API URL at `<PRODUCT_VERIFICATION_BASE_URL>/api/products/verify/<qr_reference>/`.
+   Regenerate existing QR images after changing the frontend URL.
 4. Public verification returns `REJECTED` if the product is on hold/rejected
    or an input batch/latest test is rejected. It returns `INCOMPLETE` if any
    batch lacks an approved latest test, is on hold, the product/manufacturing
@@ -556,19 +521,15 @@ per page).
 
 Full prefix: `/api/auth/`.
 
-### Organizations — `/api/organizations/`
+### Business participants — `/api/participants/`
 
 | Method | Path | Body / behavior |
 |---|---|---|
-| POST | `/create/` | Organization fields; type must match caller's role; starts `PENDING` and is assigned to caller |
-| GET | `/list/` | Staff sees all; other users see their organization. Supports search/ordering. |
-| GET | `/detail/<organization_id>/` | Member or staff read |
-| PUT/PATCH | `/detail/<organization_id>/` | Staff/admin only |
-| GET | `/my-organization/` | Current user's organization or 404 |
+| GET | `/` | Verified, active Collector, Lab, or Factory profiles by role; supports name/registration search. No organization membership is required. |
 
-`verification_status`, timestamps, and organization ID cannot be assigned by
-public API input. The verification document is write-only; download uses the
-private endpoint listed below.
+Organization creation, listing, detail, verification, and document endpoints
+are disabled. Existing organization rows and references are preserved as
+optional legacy data.
 
 ### Farmer and batches — `/api/farmers/` (also `/api/batches/`)
 
@@ -582,7 +543,7 @@ private endpoint listed below.
 | PUT/PATCH | `/batches/detail/<batch_id>/` | Farmer may edit source fields only in `REGISTERED` or `COLLECTED` state |
 | GET | `/batches/history/<batch_id>/` | Batch and chronological transfer, lab, manufacturing, product timeline for authorized participants |
 
-The server controls batch ID, owner, farmer, organization, initial available
+The server controls batch ID, owner, farmer, initial available
 quantity, lifecycle status, and blockchain fields.
 
 ### Collector and custody — `/api/collectors/`
@@ -591,7 +552,7 @@ quantity, lifecycle status, and blockchain fields.
 |---|---|---|
 | GET/PUT/PATCH | `/profile/` | Collector profile; GET may create a pending profile |
 | GET | `/dashboard/` | Pending and accepted incoming transfer counts |
-| GET | `/available-batches/` | Non-rejected/non-consumed batches if caller has a collector profile; current queryset is not organization- or owner-scoped |
+| GET | `/available-batches/` | Eligible batches currently owned by the authenticated Collector |
 | POST | `/transfer/initiate/` | `batch_id`, `to_party` (user DB ID), full `quantity`, `transfer_location`; optional `remarks` |
 | GET | `/transfer/pending/` | Pending transfers addressed to caller |
 | POST | `/transfer/accept/` | `event_id`, optional `remarks`; accepts addressed pending event |
@@ -653,7 +614,6 @@ batch number and QR reference are unique.
 
 | Method | Path | Access |
 |---|---|---|
-| GET | `/api/private/organizations/<organization_id>/verification-document/` | Organization members and staff |
 | GET | `/api/private/lab-tests/<test_id>/certificate/` | Lab, batch, and transfer participants; staff |
 
 Private documents are returned as attachments with `nosniff` and `no-store`
@@ -664,14 +624,14 @@ directory publicly.
 
 | Model | Purpose and important relationships |
 |---|---|
-| `User` | Unique email login, role, active/email-verified/staff flags, optional organization |
-| `Organization` | Organization details, verification status, optional verification document |
-| `FarmerProfile` | One-to-one user, belongs to organization, registers batches |
-| `CollectorProfile` | One-to-one user and organization |
-| `LabProfile` | One-to-one user and organization; owns assigned tests |
-| `FactoryProfile` | One-to-one user and organization; owns manufacturing records/products |
-| `HerbBatch` | Farmer, organization, current owner, amounts, origin, status, optional chain fields |
-| `TransferEvent` | Batch, sender, recipient, their organizations, quantity, status and location |
+| `User` | Unique email login, role, active/email-verified/staff flags; optional legacy organization link |
+| `Organization` | Legacy organization details and verification document; onboarding and management flows are disabled |
+| `FarmerProfile` | One-to-one user, optional legacy organization link, registers batches |
+| `CollectorProfile` | One-to-one user, optional legacy organization link |
+| `LabProfile` | One-to-one user, optional legacy organization link; owns assigned tests |
+| `FactoryProfile` | One-to-one user, optional legacy organization link; owns manufacturing records/products |
+| `HerbBatch` | Farmer, optional legacy organization link, current owner, amounts, origin, status, optional chain fields |
+| `TransferEvent` | Batch, sender, recipient, optional legacy organization links, quantity, status and location |
 | `LabTest` | Batch, assigned lab, submitting/reviewing users, results and optional certificate |
 | `ManufacturingRecord` | Factory, creator, input/output quantities, process and status |
 | `ManufacturingBatch` | Unique link per record/batch with quantity and unit consumed |
@@ -704,7 +664,6 @@ manufacturing-output allocation, and record ownership in service/view logic.
 
 | Entity | Status values |
 |---|---|
-| Organization | `PENDING`, `VERIFIED`, `REJECTED`, `SUSPENDED` |
 | Role profiles | Farmer profile has `PENDING`, `VERIFIED`, `REJECTED`, `SUSPENDED`; collector/lab/factory store verification status and use the same operational values |
 | Herb batch | `REGISTERED`, `COLLECTED`, `WITH_COLLECTOR`, `SENT_TO_LAB`, `UNDER_TESTING`, `APPROVED`, `REJECTED`, `ON_HOLD`, `SENT_TO_FACTORY`, `IN_PROCESSING`, `CONSUMED`, `COMPLETED` |
 | Transfer | `INITIATED`, `ACCEPTED`, `REJECTED`, `CANCELLED` |
@@ -727,14 +686,23 @@ email-verified account with the `ADMIN` role.
 ### Custom staff panel
 
 The template-based panel is mounted at `/panel/`, with login at
-`/panel/login/`. It requires an active staff user and provides dashboard,
-users, organizations, batches, lab tests, factories, products, and activity
-views. It uses Django sessions, not JWT.
+`/panel/login/`. It requires an active staff user and uses Django sessions, not
+JWT. Open **User verification** or visit `/panel/users/?status=PENDING` to find
+business profiles awaiting review. Open a user to inspect their submitted
+farmer, collector, laboratory, or factory details, then approve or reject the
+profile. Decisions and review notes are recorded in the activity log.
+
+Email OTP verification is separate from administrator profile approval; users
+must complete OTP verification themselves. A profile can be reviewed only
+when its account is active and its email is verified. Editing an approved or
+rejected profile returns it to pending review. The panel also provides
+dashboard, batches, lab tests, factories, products, and activity views;
+organization management is removed.
 
 ### Seed command
 
 `python manage.py seed_test_data` creates deterministic local examples across
-organizations, users/profiles, batches, transfers, lab tests, manufacturing,
+users/profiles, batches, transfers, lab tests, manufacturing,
 products, OTP, blockchain placeholders, and logs. It accepts `--password` and
 `--clear`. It is disabled unless `DJANGO_DEBUG=True`.
 
@@ -767,9 +735,8 @@ assume:
    confidential data in those fields.
 7. **Some read operations have side effects.** Role profile `GET` may create a
    pending profile.
-8. **Collector batch listing is not tenant scoped.** The current endpoint lists
-   all batches except rejected/consumed when a collector profile exists. Review
-   this behavior before exposing it to users across organizations.
+8. **Organizations are legacy optional data.** Existing organization links are
+   retained but are not used for authorization, discovery, or onboarding.
 9. **Some profile routes are permissive.** Collector/lab/factory profile
    endpoints do not all enforce that the authenticated user's role matches the
    profile route; verification status itself remains read-only. Keep these

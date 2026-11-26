@@ -8,7 +8,6 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 
 from lab.models import LabTest
-from organization.models import Organization
 
 
 def _file_response(field_file):
@@ -23,21 +22,6 @@ def _file_response(field_file):
     response['X-Content-Type-Options'] = 'nosniff'
     response['Cache-Control'] = 'private, no-store'
     return response
-
-
-class OrganizationVerificationDocumentView(APIView):
-    permission_classes = (IsAuthenticated,)
-
-    @extend_schema(responses={200: OpenApiTypes.BINARY, 404: OpenApiTypes.OBJECT})
-    def get(self, request, organization_id):
-        organization = get_object_or_404(Organization, organization_id=organization_id)
-        if not (
-            request.user.is_staff
-            or request.user.role == 'ADMIN'
-            or request.user.organization_id == organization.pk
-        ):
-            raise Http404
-        return _file_response(organization.verification_document)
 
 
 class LabCertificateView(APIView):

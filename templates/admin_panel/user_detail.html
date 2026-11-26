@@ -1,2 +1,121 @@
-{% extends "admin_panel/base.html" %}{% block content %}<h1 class="h3">{{ detail_user.name }}</h1>
-<dl class="row bg-white p-3"><dt class="col-sm-3">Email</dt><dd class="col-sm-9">{{ detail_user.email }}</dd><dt class="col-sm-3">Role</dt><dd class="col-sm-9">{{ detail_user.role }}</dd><dt class="col-sm-3">Organization</dt><dd class="col-sm-9">{{ detail_user.organization.organization_name|default:"-" }}</dd><dt class="col-sm-3">Email verified</dt><dd class="col-sm-9">{{ detail_user.is_email_verified|yesno:"Yes,No" }}</dd><dt class="col-sm-3">Active</dt><dd class="col-sm-9">{{ detail_user.is_active|yesno:"Yes,No" }}</dd></dl>{% endblock %}
+{% extends "admin_panel/base.html" %}
+{% block title %}Review {{ detail_user.name }} | Herb Traceability{% endblock %}
+{% block content %}
+<div class="page-heading d-flex flex-wrap justify-content-between align-items-end gap-3">
+  <div>
+    <a class="small text-decoration-none" href="{% url 'admin_users' %}">&larr; Back to users</a>
+    <h1 class="mt-2">Review user</h1>
+    <p>Check email verification and submitted role details before approving access.</p>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-xl-4">
+    <section class="card h-100">
+      <div class="card-body">
+        <div class="user-chip mb-4">
+          <span class="user-avatar">{{ detail_user.name|first|upper }}</span>
+          <span><strong class="d-block fs-5">{{ detail_user.name }}</strong><small class="text-muted">{{ detail_user.get_role_display }}</small></span>
+        </div>
+        <div class="profile-field"><small class="text-muted d-block">Email</small><strong>{{ detail_user.email }}</strong></div>
+        <div class="profile-field"><small class="text-muted d-block">Phone</small>{{ detail_user.phone_number|default:"Not provided" }}</div>
+        <div class="profile-field"><small class="text-muted d-block">Joined</small>{{ detail_user.date_joined|date:"M j, Y, H:i" }}</div>
+        <div class="profile-field d-flex justify-content-between align-items-center">
+          <span><small class="text-muted d-block">Email verification</small>OTP verification</span>
+          {% if detail_user.is_email_verified %}
+            <span class="status-badge status-approved">Verified</span>
+          {% else %}
+            <span class="status-badge status-pending">Pending</span>
+          {% endif %}
+        </div>
+        <div class="profile-field d-flex justify-content-between align-items-center">
+          <span><small class="text-muted d-block">Account access</small>Active status</span>
+          {% if detail_user.is_active %}
+            <span class="status-badge status-approved">Active</span>
+          {% else %}
+            <span class="status-badge status-neutral">Inactive</span>
+          {% endif %}
+        </div>
+        <div class="profile-field d-flex justify-content-between align-items-center">
+          <span><small class="text-muted d-block">Role profile</small>Administrator review</span>
+          {% if profile %}
+            {% if profile.verification_status == "PENDING" %}
+              <span class="status-badge status-pending">Pending</span>
+            {% elif profile.verification_status == "VERIFIED" %}
+              <span class="status-badge status-approved">Approved</span>
+            {% elif profile.verification_status == "REJECTED" %}
+              <span class="status-badge status-rejected">Rejected</span>
+            {% else %}
+              <span class="status-badge status-neutral">{{ profile.verification_status|title }}</span>
+            {% endif %}
+          {% else %}
+            <span class="status-badge status-neutral">Not submitted</span>
+          {% endif %}
+        </div>
+        <form method="post" class="mt-4">{% csrf_token %}
+          <input type="hidden" name="action" value="toggle_active">
+          {% if detail_user.is_staff and not request.user.is_superuser %}
+            <button class="btn btn-outline-secondary w-100" type="button" disabled>Superuser required to manage administrator</button>
+          {% elif request.user.user_id == detail_user.user_id and detail_user.is_active %}
+            <button class="btn btn-outline-secondary w-100" type="button" disabled>You cannot deactivate your own account</button>
+          {% elif detail_user.is_active %}
+            <button class="btn btn-outline-danger w-100" type="submit">Deactivate account</button>
+          {% else %}
+            <button class="btn btn-outline-primary w-100" type="submit">Activate account</button>
+          {% endif %}
+        </form>
+      </div>
+    </section>
+  </div>
+
+  <div class="col-xl-8">
+    <section class="card mb-3">
+      <div class="card-header">Submitted {{ detail_user.get_role_display|lower }} profile</div>
+      <div class="card-body">
+        {% if profile %}
+          <div class="row">
+            {% for label,value in profile_fields %}
+              <div class="col-md-6 profile-field">
+                <small class="text-muted d-block">{{ label|title }}</small>
+                {% if value %}{{ value }}{% else %}<span class="text-muted">Not provided</span>{% endif %}
+              </div>
+            {% empty %}
+              <p class="text-muted mb-0">No profile information was provided.</p>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="text-center py-4">
+            <h2 class="h5">Role profile not submitted</h2>
+            <p class="text-muted mb-0">This account has no reviewable business profile yet.</p>
+          </div>
+        {% endif %}
+      </div>
+    </section>
+
+    {% if profile %}
+      <section class="card">
+        <div class="card-header">Review decision</div>
+        <div class="card-body">
+          {% if not detail_user.is_email_verified or not detail_user.is_active %}
+            <div class="alert alert-warning mb-3">
+              Verify the user’s email and activate the account before approving or rejecting the role profile.
+            </div>
+          {% endif %}
+          <form method="post">{% csrf_token %}
+            <label class="form-label fw-semibold" for="review-note">Internal review note <span class="text-muted fw-normal">(optional, recorded in activity log)</span></label>
+            <textarea class="form-control mb-3" id="review-note" name="note" rows="3" maxlength="2000" placeholder="Add the reason for this decision or any checks performed"></textarea>
+            <div class="d-flex flex-wrap gap-2">
+              {% if profile.verification_status != "VERIFIED" %}
+                <button class="btn btn-primary" type="submit" name="action" value="approve_profile" {% if not detail_user.is_active or not detail_user.is_email_verified %}disabled{% endif %}>Approve profile</button>
+              {% endif %}
+              {% if profile.verification_status != "REJECTED" %}
+                <button class="btn btn-outline-danger" type="submit" name="action" value="reject_profile" {% if not detail_user.is_active or not detail_user.is_email_verified %}disabled{% endif %}>Reject profile</button>
+              {% endif %}
+            </div>
+          </form>
+        </div>
+      </section>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

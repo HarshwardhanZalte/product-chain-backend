@@ -10,7 +10,7 @@ from django.utils import timezone
 from .models import EmailOTP
 
 
-DEFAULT_OTP = '666666'
+DEFAULT_OTP = '098765'
 
 
 class EmailDeliveryError(Exception):
@@ -28,6 +28,31 @@ def log_activity(user, action, entity_type, entity_id, description='', ip_addres
         description=description,
         ip_address=ip_address,
     )
+
+
+@transaction.atomic
+def update_profile_for_review(serializer, user):
+    profile = serializer.instance
+    has_changes = any(
+        getattr(profile, field_name) != value
+        for field_name, value in serializer.validated_data.items()
+    )
+    requires_review = (
+        has_changes
+        and profile.verification_status in ('VERIFIED', 'REJECTED')
+    )
+    if not requires_review:
+        return serializer.save()
+
+    profile = serializer.save(verification_status='PENDING')
+    log_activity(
+        user,
+        'BUSINESS_PROFILE_UPDATED_REQUIRES_REVIEW',
+        profile.__class__.__name__,
+        profile.pk,
+        'Profile details changed; administrator review is required.',
+    )
+    return profile
 
 
 @transaction.atomic

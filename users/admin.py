@@ -19,7 +19,7 @@ class UserAdmin(DjangoUserAdmin):
     search_fields = ('email', 'name', 'phone_number')
     fieldsets = (
         (None, {'fields': ('email', 'password')}),
-        ('Profile', {'fields': ('name', 'phone_number', 'role', 'organization')}),
+        ('Profile', {'fields': ('name', 'phone_number', 'role')}),
         ('Verification', {'fields': ('is_email_verified', 'is_active')}),
         ('Permissions', {'fields': ('is_staff', 'is_superuser', 'groups', 'user_permissions')}),
         ('Dates', {'fields': ('last_login', 'date_joined')}),
@@ -32,7 +32,6 @@ class UserAdmin(DjangoUserAdmin):
                 'name',
                 'phone_number',
                 'role',
-                'organization',
                 'password1',
                 'password2',
                 'is_staff',

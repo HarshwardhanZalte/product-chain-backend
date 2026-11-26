@@ -9,7 +9,8 @@ from .models import LabProfile, LabTest
 
 @admin.register(LabProfile)
 class LabProfileAdmin(admin.ModelAdmin):
-    list_display = ('laboratory_name', 'registration_number', 'organization', 'verification_status')
+    exclude = ('organization',)
+    list_display = ('laboratory_name', 'registration_number', 'verification_status')
     list_filter = ('verification_status',)
     search_fields = ('laboratory_name', 'registration_number')
 

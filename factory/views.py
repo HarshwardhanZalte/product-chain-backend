@@ -8,14 +8,15 @@ from rest_framework.exceptions import NotFound
 from drf_spectacular.utils import OpenApiTypes, extend_schema
 
 from farmer.models import HerbBatch
-from users.permissions import IsApprovedOrganizationUser, IsVerifiedActiveUser
-from users.services import log_activity
+from users.permissions import IsApprovedBusinessUser, IsExpectedRole, IsVerifiedActiveUser
+from users.services import log_activity, update_profile_for_review
 
 from collector.models import TransferEvent
 from collector.services import accept_transfer
 from .models import ManufacturingBatch, ManufacturingRecord
 from .serializers import (
     ManufacturingCreateSerializer,
+    ManufacturingActionSerializer,
     ManufacturingRecordSerializer,
     ReceiveBatchSerializer,
     FactoryProfileSerializer,
@@ -23,17 +24,15 @@ from .serializers import (
 
 
 class FactoryProfileView(generics.RetrieveUpdateAPIView):
-    permission_classes = (IsVerifiedActiveUser,)
+    permission_classes = (IsVerifiedActiveUser, IsExpectedRole)
+    expected_role = 'FACTORY'
     serializer_class = FactoryProfileSerializer
 
     def get_object(self):
-        if not self.request.user.organization:
-            raise NotFound('Organization is required for a factory profile.')
         from .models import FactoryProfile
         profile, _ = FactoryProfile.objects.get_or_create(
             user=self.request.user,
             defaults={
-                'organization': self.request.user.organization,
                 'factory_name': self.request.user.name,
                 'registration_number': f'FAC-{self.request.user.user_id}',
                 'address': '',
@@ -42,6 +41,8 @@ class FactoryProfileView(generics.RetrieveUpdateAPIView):
         )
         return profile
 
+    def perform_update(self, serializer):
+        update_profile_for_review(serializer, self.request.user)
 
 
 class FactoryDashboardView(APIView):
@@ -80,7 +81,7 @@ class AvailableApprovedBatchesView(generics.ListAPIView):
 
 
 class ReceiveBatchView(APIView):
-    permission_classes = (IsApprovedOrganizationUser,)
+    permission_classes = (IsApprovedBusinessUser,)
 
     @extend_schema(request=ReceiveBatchSerializer, responses={200: ReceiveBatchSerializer})
     @transaction.atomic
@@ -105,7 +106,7 @@ class ReceiveBatchView(APIView):
 
 
 class ManufacturingCreateView(APIView):
-    permission_classes = (IsApprovedOrganizationUser,)
+    permission_classes = (IsApprovedBusinessUser,)
 
     @extend_schema(request=ManufacturingCreateSerializer, responses={201: ManufacturingRecordSerializer})
     @transaction.atomic
@@ -152,10 +153,24 @@ class ManufacturingCreateView(APIView):
             product_name=data['product_name'],
             process_date=data['process_date'],
             process_description=data['process_description'],
+            facility_line=data.get('facility_line', ''),
+            shift=data.get('shift', ''),
+            standard_operating_procedure=data.get(
+                'standard_operating_procedure',
+                '',
+            ),
+            solvent_method=data.get('solvent_method', ''),
+            target_yield_ratio=data.get('target_yield_ratio', ''),
+            process_parameters=data.get('process_parameters', {}),
+            quality_control_lead=data.get('quality_control_lead', ''),
             input_quantity=total_input,
             output_quantity=data['output_quantity'],
             unit=data['unit'],
-            status=ManufacturingRecord.Status.IN_PROGRESS,
+            status=(
+                ManufacturingRecord.Status.PLANNED
+                if data['save_as_draft']
+                else ManufacturingRecord.Status.COMPLETED
+            ),
             remarks=data.get('remarks', ''),
         )
         for batch_id, (batch, quantity) in locked_batches.items():
@@ -165,6 +180,74 @@ class ManufacturingCreateView(APIView):
                 quantity_used=quantity,
                 unit=data['unit'],
             )
+            if not data['save_as_draft']:
+                batch.available_quantity -= quantity
+                batch.status = (
+                    HerbBatch.Status.CONSUMED
+                    if batch.available_quantity == 0
+                    else HerbBatch.Status.IN_PROCESSING
+                )
+                batch.save(update_fields=['available_quantity', 'status', 'updated_at'])
+        log_activity(
+            request.user,
+            'MANUFACTURING_CREATED',
+            'ManufacturingRecord',
+            record.manufacturing_id,
+            f'Completed manufacturing record {record.product_name}',
+        )
+        return Response(ManufacturingRecordSerializer(record).data, status=201)
+
+
+class CompleteManufacturingDraftView(APIView):
+    permission_classes = (IsApprovedBusinessUser,)
+
+    @extend_schema(
+        request=ManufacturingActionSerializer,
+        responses={200: ManufacturingRecordSerializer},
+    )
+    @transaction.atomic
+    def post(self, request):
+        if request.user.role != 'FACTORY':
+            return Response({'detail': 'Only factory users can complete manufacturing.'}, status=403)
+        serializer = ManufacturingActionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        profile = getattr(request.user, 'factory_profile', None)
+        record = ManufacturingRecord.objects.select_for_update().filter(
+            manufacturing_id=serializer.validated_data['manufacturing_id'],
+            factory=profile,
+            status=ManufacturingRecord.Status.PLANNED,
+        ).first()
+        if not record:
+            return Response({'detail': 'Planned manufacturing record not found.'}, status=404)
+
+        links = list(
+            record.input_batches.select_related('herb_batch').all()
+        )
+        batches = []
+        for link in links:
+            batch = HerbBatch.objects.select_for_update().filter(
+                pk=link.herb_batch_id,
+                current_owner=request.user,
+                status=HerbBatch.Status.SENT_TO_FACTORY,
+            ).first()
+            if (
+                not batch
+                or batch.available_quantity < link.quantity_used
+                or batch.unit != link.unit
+                or link.unit != record.unit
+            ):
+                return Response(
+                    {
+                        'detail': (
+                            f'Input batch {link.herb_batch.batch_id} is no longer '
+                            'available in the required quantity and unit.'
+                        )
+                    },
+                    status=409,
+                )
+            batches.append((batch, link.quantity_used))
+
+        for batch, quantity in batches:
             batch.available_quantity -= quantity
             batch.status = (
                 HerbBatch.Status.CONSUMED
@@ -176,12 +259,38 @@ class ManufacturingCreateView(APIView):
         record.save(update_fields=['status', 'updated_at'])
         log_activity(
             request.user,
-            'MANUFACTURING_CREATED',
+            'MANUFACTURING_COMPLETED',
             'ManufacturingRecord',
             record.manufacturing_id,
             f'Completed manufacturing record {record.product_name}',
         )
-        return Response(ManufacturingRecordSerializer(record).data, status=201)
+        return Response(ManufacturingRecordSerializer(record).data)
+
+
+class CancelManufacturingDraftView(APIView):
+    permission_classes = (IsApprovedBusinessUser,)
+
+    @extend_schema(
+        request=ManufacturingActionSerializer,
+        responses={200: ManufacturingRecordSerializer},
+    )
+    @transaction.atomic
+    def post(self, request):
+        if request.user.role != 'FACTORY':
+            return Response({'detail': 'Only factory users can cancel manufacturing.'}, status=403)
+        serializer = ManufacturingActionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        profile = getattr(request.user, 'factory_profile', None)
+        record = ManufacturingRecord.objects.select_for_update().filter(
+            manufacturing_id=serializer.validated_data['manufacturing_id'],
+            factory=profile,
+            status=ManufacturingRecord.Status.PLANNED,
+        ).first()
+        if not record:
+            return Response({'detail': 'Planned manufacturing record not found.'}, status=404)
+        record.status = ManufacturingRecord.Status.CANCELLED
+        record.save(update_fields=['status', 'updated_at'])
+        return Response(ManufacturingRecordSerializer(record).data)
 
 
 class ManufacturingListView(generics.ListAPIView):

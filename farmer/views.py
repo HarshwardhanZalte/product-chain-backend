@@ -2,16 +2,24 @@ from datetime import date
 
 from django.db import transaction
 from django.db import models
-from rest_framework import filters, generics, permissions, status
+from rest_framework import filters, generics, status
 from rest_framework.exceptions import NotFound
 from drf_spectacular.utils import OpenApiTypes, extend_schema
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from users.permissions import IsApprovedOrganizationUser, IsVerifiedActiveUser
+from users.permissions import IsApprovedBusinessUser, IsExpectedRole, IsVerifiedActiveUser
+from users.services import update_profile_for_review
 
-from .models import FarmerProfile, HerbBatch
-from .serializers import FarmerProfileSerializer, HerbBatchSerializer
+from collector.models import TransferEvent
+from .models import FarmerProfile, FieldEvidence, HerbBatch
+from .serializers import (
+    FarmerProfileSerializer,
+    FieldEvidenceSerializer,
+    FieldEvidenceUploadSerializer,
+    HerbBatchSerializer,
+)
 
 
 def generate_batch_id():
@@ -25,15 +33,13 @@ def generate_batch_id():
 
 class FarmerProfileView(generics.RetrieveUpdateAPIView):
     serializer_class = FarmerProfileSerializer
-    permission_classes = (IsVerifiedActiveUser,)
+    permission_classes = (IsVerifiedActiveUser, IsExpectedRole)
+    expected_role = 'FARMER'
 
     def get_object(self):
-        if not self.request.user.organization:
-            raise NotFound('Organization is required for a farmer profile.')
         profile, _ = FarmerProfile.objects.get_or_create(
             user=self.request.user,
             defaults={
-                'organization': self.request.user.organization,
                 'farmer_name': self.request.user.name,
                 'phone_number': self.request.user.phone_number,
                 'address': '',
@@ -46,9 +52,7 @@ class FarmerProfileView(generics.RetrieveUpdateAPIView):
         return profile
 
     def perform_update(self, serializer):
-        if getattr(self.request.user, 'role', None) != 'FARMER':
-            raise permissions.PermissionDenied('Only farmers can update this profile.')
-        serializer.save()
+        update_profile_for_review(serializer, self.request.user)
 
 
 class FarmerDashboardView(APIView):
@@ -72,7 +76,7 @@ class FarmerDashboardView(APIView):
 
 class BatchRegisterView(generics.CreateAPIView):
     serializer_class = HerbBatchSerializer
-    permission_classes = (IsApprovedOrganizationUser,)
+    permission_classes = (IsApprovedBusinessUser,)
 
     @transaction.atomic
     def perform_create(self, serializer):
@@ -81,8 +85,6 @@ class BatchRegisterView(generics.CreateAPIView):
         profile = getattr(self.request.user, 'farmer_profile', None)
         if not profile:
             raise permissions.PermissionDenied('Farmer profile is required.')
-        if not self.request.user.organization:
-            raise permissions.PermissionDenied('Organization is required.')
         quantity = serializer.validated_data['quantity']
         serializer.save(
             batch_id=generate_batch_id(),
@@ -105,9 +107,7 @@ class BatchListView(generics.ListAPIView):
             return HerbBatch.objects.all()
         if self.request.user.role == 'FARMER':
             return HerbBatch.objects.filter(farmer__user=self.request.user)
-        if self.request.user.organization:
-            return HerbBatch.objects.filter(organization=self.request.user.organization)
-        return HerbBatch.objects.none()
+        return HerbBatch.objects.filter(current_owner=self.request.user)
 
 
 class BatchDetailView(generics.RetrieveUpdateAPIView):
@@ -117,7 +117,7 @@ class BatchDetailView(generics.RetrieveUpdateAPIView):
 
     def get_permissions(self):
         permission_class = (
-            IsApprovedOrganizationUser
+            IsApprovedBusinessUser
             if self.request.method not in permissions.SAFE_METHODS
             else IsVerifiedActiveUser
         )
@@ -128,7 +128,7 @@ class BatchDetailView(generics.RetrieveUpdateAPIView):
             return HerbBatch.objects.all()
         if self.request.user.role == 'FARMER':
             return HerbBatch.objects.filter(farmer__user=self.request.user)
-        return HerbBatch.objects.filter(organization=self.request.user.organization)
+        return HerbBatch.objects.filter(current_owner=self.request.user)
 
     def perform_update(self, serializer):
         if self.request.user.role != 'FARMER':
@@ -215,3 +215,86 @@ class BatchHistoryView(APIView):
             'batch': HerbBatchSerializer(batch).data,
             'history': history,
         })
+
+
+class BatchEvidenceView(APIView):
+    parser_classes = (MultiPartParser, FormParser)
+
+    def get_permissions(self):
+        permission_class = (
+            IsApprovedBusinessUser
+            if self.request.method == 'POST'
+            else IsVerifiedActiveUser
+        )
+        return [permission_class()]
+
+    def get_batch(self, request, batch_id):
+        batch = HerbBatch.objects.filter(batch_id=batch_id).first()
+        if not batch:
+            raise NotFound('Batch not found.')
+        user = request.user
+        if user.is_staff or user.role == 'ADMIN':
+            return batch
+        is_participant = (
+            batch.current_owner_id == user.pk
+            or batch.farmer.user_id == user.pk
+            or TransferEvent.objects.filter(batch=batch).filter(
+                models.Q(from_party=user) | models.Q(to_party=user)
+            ).exists()
+            or batch.laboratory_tests.filter(laboratory__user=user).exists()
+            or batch.manufacturing_links.filter(
+                manufacturing_record__factory__user=user
+            ).exists()
+        )
+        if not is_participant:
+            raise NotFound('Batch not found.')
+        return batch
+
+    @extend_schema(responses={200: FieldEvidenceSerializer(many=True)})
+    def get(self, request, batch_id):
+        batch = self.get_batch(request, batch_id)
+        evidence = batch.field_evidence.all()
+        return Response(
+            FieldEvidenceSerializer(
+                evidence,
+                many=True,
+                context={'request': request},
+            ).data
+        )
+
+    @extend_schema(
+        request=FieldEvidenceUploadSerializer,
+        responses={201: FieldEvidenceSerializer},
+    )
+    @transaction.atomic
+    def post(self, request, batch_id):
+        batch = self.get_batch(request, batch_id)
+        if request.user.role != 'FARMER' or batch.farmer.user_id != request.user.pk:
+            raise permissions.PermissionDenied(
+                'Only the batch farmer can upload field evidence.'
+            )
+        if batch.status not in (
+            HerbBatch.Status.REGISTERED,
+            HerbBatch.Status.COLLECTED,
+        ):
+            raise permissions.PermissionDenied(
+                'Field evidence cannot be changed after the batch is transferred.'
+            )
+        if batch.field_evidence.count() >= 8:
+            return Response(
+                {'detail': 'A batch can have at most 8 evidence files.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        serializer = FieldEvidenceUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        evidence = FieldEvidence.objects.create(
+            batch=batch,
+            **serializer.validated_data,
+        )
+        return Response(
+            FieldEvidenceSerializer(
+                evidence,
+                context={'request': request},
+            ).data,
+            status=status.HTTP_201_CREATED,
+        )

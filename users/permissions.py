@@ -20,7 +20,20 @@ class IsVerifiedActiveUser(BasePermission):
         )
 
 
-class IsApprovedOrganizationUser(IsVerifiedActiveUser):
+class IsExpectedRole(BasePermission):
+    message = 'You can only manage the profile for your account role.'
+
+    def has_permission(self, request, view):
+        expected_role = getattr(view, 'expected_role', None)
+        return bool(
+            request.user
+            and request.user.is_authenticated
+            and expected_role
+            and request.user.role == expected_role
+        )
+
+
+class IsApprovedBusinessUser(IsVerifiedActiveUser):
     def has_permission(self, request, view):
         return has_approved_business_identity(request.user) and super().has_permission(
             request, view
@@ -29,9 +42,6 @@ class IsApprovedOrganizationUser(IsVerifiedActiveUser):
 
 def has_approved_business_identity(user):
     if not user or not user.is_authenticated or not user.is_active or not user.is_email_verified:
-        return False
-    organization = getattr(user, 'organization', None)
-    if not organization or organization.verification_status != 'VERIFIED':
         return False
     profile_relation = {
         'FARMER': 'farmer_profile',

@@ -10,7 +10,7 @@ from collector.models import CollectorProfile, TransferEvent
 from factory.models import FactoryProfile, ManufacturingBatch, ManufacturingRecord
 from farmer.models import FarmerProfile, HerbBatch
 from lab.models import LabProfile, LabTest
-from organization.models import BlockchainEvent, Organization
+from organization.models import BlockchainEvent
 from product.models import Product, ProductBatch
 from users.models import ActivityLog, EmailOTP, User
 from users.services import DEFAULT_OTP
@@ -40,56 +40,29 @@ class Command(BaseCommand):
         if options['clear']:
             self._clear_test_data()
 
-        organizations = {
-            'farmer': self._organization(
-                'Seed Farmer Cooperative',
-                'FARMER_GROUP',
-                'SEED-FARM-001',
-            ),
-            'collector': self._organization(
-                'Seed Herb Collector',
-                'COLLECTOR',
-                'SEED-COLL-001',
-            ),
-            'lab': self._organization(
-                'Seed Testing Laboratory',
-                'TESTING_LAB',
-                'SEED-LAB-001',
-            ),
-            'factory': self._organization(
-                'Seed Ayurvedic Factory',
-                'MANUFACTURER',
-                'SEED-FAC-001',
-            ),
-        }
-
         users = {
             'farmer': self._user(
                 'seed.farmer@example.com',
                 'Seed Farmer',
                 'FARMER',
-                organizations['farmer'],
                 password,
             ),
             'collector': self._user(
                 'seed.collector@example.com',
                 'Seed Collector',
                 'COLLECTOR',
-                organizations['collector'],
                 password,
             ),
             'lab': self._user(
                 'seed.lab@example.com',
                 'Seed Laboratory User',
                 'LAB',
-                organizations['lab'],
                 password,
             ),
             'factory': self._user(
                 'seed.factory@example.com',
                 'Seed Factory User',
                 'FACTORY',
-                organizations['factory'],
                 password,
             ),
         }
@@ -107,7 +80,7 @@ class Command(BaseCommand):
         farmer_profile, _ = FarmerProfile.objects.update_or_create(
             user=users['farmer'],
             defaults={
-                'organization': organizations['farmer'],
+                'organization': None,
                 'farmer_name': 'Seed Farmer',
                 'phone_number': '9000000001',
                 'address': 'Seed Farm Road',
@@ -124,7 +97,7 @@ class Command(BaseCommand):
         collector_profile, _ = CollectorProfile.objects.update_or_create(
             user=users['collector'],
             defaults={
-                'organization': organizations['collector'],
+                'organization': None,
                 'collector_name': 'Seed Collector',
                 'phone_number': '9000000002',
                 'address': 'Seed Collector Depot',
@@ -135,7 +108,7 @@ class Command(BaseCommand):
         lab_profile, _ = LabProfile.objects.update_or_create(
             user=users['lab'],
             defaults={
-                'organization': organizations['lab'],
+                'organization': None,
                 'laboratory_name': 'Seed Testing Laboratory',
                 'registration_number': 'SEED-LAB-REG-001',
                 'address': 'Seed Laboratory Campus',
@@ -147,7 +120,7 @@ class Command(BaseCommand):
         factory_profile, _ = FactoryProfile.objects.update_or_create(
             user=users['factory'],
             defaults={
-                'organization': organizations['factory'],
+                'organization': None,
                 'factory_name': 'Seed Ayurvedic Factory',
                 'registration_number': 'SEED-FAC-REG-001',
                 'address': 'Seed Factory Industrial Area',
@@ -176,7 +149,7 @@ class Command(BaseCommand):
                 'state': 'Maharashtra',
                 'farmer': farmer_profile,
                 'current_owner': users['factory'],
-                'organization': organizations['farmer'],
+                'organization': None,
                 'status': 'CONSUMED',
                 'remarks': 'Approved and consumed seed batch',
             },
@@ -200,7 +173,7 @@ class Command(BaseCommand):
                 'state': 'Maharashtra',
                 'farmer': farmer_profile,
                 'current_owner': users['lab'],
-                'organization': organizations['farmer'],
+                'organization': None,
                 'status': 'REJECTED',
                 'remarks': 'Rejected seed batch',
             },
@@ -212,8 +185,8 @@ class Command(BaseCommand):
                 'batch': approved_batch,
                 'from_party': users['farmer'],
                 'to_party': users['collector'],
-                'from_organization': organizations['farmer'],
-                'to_organization': organizations['collector'],
+                'from_organization': None,
+                'to_organization': None,
                 'quantity': Decimal('100.000'),
                 'transfer_date': date(2026, 10, 3),
                 'transfer_location': 'Seed Collector Depot',
@@ -229,8 +202,8 @@ class Command(BaseCommand):
                 'batch': approved_batch,
                 'from_party': users['collector'],
                 'to_party': users['factory'],
-                'from_organization': organizations['collector'],
-                'to_organization': organizations['factory'],
+                'from_organization': None,
+                'to_organization': None,
                 'quantity': Decimal('100.000'),
                 'transfer_date': date(2026, 10, 5),
                 'transfer_location': 'Seed Factory Receiving Dock',
@@ -388,31 +361,14 @@ class Command(BaseCommand):
             'Seed administrator: seed.admin@example.com (only created when no superuser exists)'
         ))
 
-    def _organization(self, name, organization_type, registration_number):
-        organization, _ = Organization.objects.update_or_create(
-            registration_number=registration_number,
-            defaults={
-                'organization_name': name,
-                'organization_type': organization_type,
-                'email': f"{registration_number.lower()}@example.com",
-                'phone_number': '9000000010',
-                'address': f'{name} Address',
-                'state': 'Maharashtra',
-                'district': 'Pune',
-                'pincode': '411001',
-                'verification_status': 'VERIFIED',
-            },
-        )
-        return organization
-
-    def _user(self, email, name, role, organization, password):
+    def _user(self, email, name, role, password):
         user, _ = User.objects.update_or_create(
             email=email,
             defaults={
                 'name': name,
                 'phone_number': '9000000020',
                 'role': role,
-                'organization': organization,
+                'organization': None,
                 'is_active': True,
                 'is_email_verified': True,
                 'is_staff': False,
@@ -450,6 +406,3 @@ class Command(BaseCommand):
         ).delete()
         HerbBatch.objects.filter(batch_id__in=['ASH-2026-00001', 'ASH-2026-00002']).delete()
         User.objects.filter(pk__in=test_user_ids).delete()
-        Organization.objects.filter(
-            registration_number__startswith='SEED-'
-        ).delete()

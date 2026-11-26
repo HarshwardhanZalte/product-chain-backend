@@ -1,12 +1,46 @@
-{% extends "admin_panel/base.html" %}{% block title %}Admin Dashboard{% endblock %}{% block content %}
-<h1 class="h3 mb-4">Dashboard</h1>
-<div class="row g-3">
-{% for label,value in dashboard_stats %}
-<div class="col-md-3"><div class="card"><div class="card-body"><small>{{ label }}</small><h3>{{ value }}</h3></div></div></div>
-{% endfor %}
+{% extends "admin_panel/base.html" %}
+{% block title %}Overview | Herb Traceability{% endblock %}
+{% block content %}
+<div class="page-heading d-flex flex-wrap justify-content-between align-items-end gap-3">
+  <div>
+    <h1>Operations overview</h1>
+    <p>Monitor registrations, review business profiles, and follow traceability activity.</p>
+  </div>
+  <a class="btn btn-primary" href="{% url 'admin_users' %}?status=PENDING">Review pending users</a>
 </div>
-<div class="card mt-4"><div class="card-header">Recent activity</div><div class="table-responsive"><table class="table mb-0">
-<thead><tr><th>Time</th><th>User</th><th>Action</th><th>Description</th></tr></thead>
-<tbody>{% for item in recent_activities %}<tr><td>{{ item.created_at }}</td><td>{{ item.user.email|default:"System" }}</td><td>{{ item.action }}</td><td>{{ item.description }}</td></tr>{% empty %}<tr><td colspan="4">No activity.</td></tr>{% endfor %}</tbody>
-</table></div></div>
+
+<div class="row g-3 mb-4">
+  {% for item in dashboard_stats %}
+    <div class="col-sm-6 col-xl-4">
+      <a class="card stat-card" href="{{ item.url }}">
+        <div class="stat-label"><span class="stat-indicator stat-{{ item.tone }}"></span>{{ item.label }}</div>
+        <div class="stat-value">{{ item.value }}</div>
+      </a>
+    </div>
+  {% endfor %}
+</div>
+
+<section class="card">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span>Recent activity</span>
+    <a class="btn btn-sm btn-outline-secondary" href="{% url 'admin_activity' %}">View activity log</a>
+  </div>
+  <div class="table-responsive">
+    <table class="table">
+      <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Details</th></tr></thead>
+      <tbody>
+        {% for item in recent_activities %}
+          <tr>
+            <td class="text-nowrap">{{ item.created_at|date:"M j, Y · H:i" }}</td>
+            <td>{{ item.user.email|default:"System" }}</td>
+            <td><span class="status-badge status-neutral">{{ item.action|cut:"_" }}</span></td>
+            <td>{{ item.description|default:item.entity_type }}</td>
+          </tr>
+        {% empty %}
+          <tr><td class="py-4 text-center text-muted" colspan="4">No activity recorded yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
 {% endblock %}

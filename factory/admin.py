@@ -5,7 +5,8 @@ from .models import FactoryProfile, ManufacturingBatch, ManufacturingRecord
 
 @admin.register(FactoryProfile)
 class FactoryProfileAdmin(admin.ModelAdmin):
-    list_display = ('factory_name', 'registration_number', 'organization', 'verification_status')
+    exclude = ('organization',)
+    list_display = ('factory_name', 'registration_number', 'verification_status')
     list_filter = ('verification_status',)
     search_fields = ('factory_name', 'registration_number')
 

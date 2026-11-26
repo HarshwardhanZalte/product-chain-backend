@@ -1,5 +1,0 @@
-{% extends "admin_panel/base.html" %}{% block content %}<h1 class="h3">Organizations</h1>
-<form class="row g-2 mb-3"><div class="col"><input class="form-control" name="q" value="{{ request.GET.q }}" placeholder="Search organizations"></div><div class="col-auto"><button class="btn btn-primary">Search</button></div></form>
-<table class="table table-striped bg-white"><thead><tr><th>Name</th><th>Type</th><th>Registration</th><th>Status</th><th>Action</th></tr></thead><tbody>
-{% for item in page_obj %}<tr><td>{{ item.organization_name }}</td><td>{{ item.organization_type }}</td><td>{{ item.registration_number }}</td><td><span class="badge bg-secondary">{{ item.verification_status }}</span></td><td><form method="post">{% csrf_token %}<input type="hidden" name="organization_id" value="{{ item.organization_id }}"><select name="status">{% for value,label in statuses %}<option value="{{ value }}" {% if item.verification_status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select><button class="btn btn-sm btn-primary">Update</button></form></td></tr>{% endfor %}
-</tbody></table>{% include "admin_panel/pagination.html" %}{% endblock %}

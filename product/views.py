@@ -6,13 +6,15 @@ from django.db import transaction
 from django.db.models import Sum
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
+from django.urls import reverse
 from rest_framework import generics, permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from drf_spectacular.utils import OpenApiTypes, extend_schema
 
 from factory.models import ManufacturingRecord
-from users.permissions import IsApprovedOrganizationUser, IsVerifiedActiveUser
+from lab.models import LabTest
+from users.permissions import IsApprovedBusinessUser, IsVerifiedActiveUser
 from users.services import log_activity
 
 from .models import Product, ProductBatch
@@ -22,8 +24,16 @@ from .serializers import ProductCreateSerializer, ProductSerializer
 def generate_product_qr(product):
     import qrcode
 
-    base_url = settings.PRODUCT_VERIFICATION_BASE_URL
-    verification_url = f"{base_url.rstrip('/')}/api/products/verify/{product.qr_reference}/"
+    frontend_base_url = getattr(
+        settings,
+        'PRODUCT_VERIFICATION_FRONTEND_URL',
+        '',
+    ).rstrip('/')
+    if frontend_base_url:
+        verification_url = f'{frontend_base_url}/verify/{product.qr_reference}/'
+    else:
+        base_url = settings.PRODUCT_VERIFICATION_BASE_URL
+        verification_url = f"{base_url.rstrip('/')}/api/products/verify/{product.qr_reference}/"
     qr = qrcode.QRCode(version=1, box_size=8, border=4)
     qr.add_data(verification_url)
     qr.make(fit=True)
@@ -39,7 +49,7 @@ def generate_product_qr(product):
 
 
 class ProductCreateView(APIView):
-    permission_classes = (IsApprovedOrganizationUser,)
+    permission_classes = (IsApprovedBusinessUser,)
 
     @extend_schema(request=ProductCreateSerializer, responses={201: ProductSerializer})
     @transaction.atomic
@@ -125,7 +135,7 @@ class ProductDetailView(generics.RetrieveAPIView):
 
 
 class ProductQRView(APIView):
-    permission_classes = (IsApprovedOrganizationUser,)
+    permission_classes = (IsApprovedBusinessUser,)
 
     @extend_schema(request=None, responses={200: ProductSerializer})
     def post(self, request, product_id):
@@ -180,6 +190,8 @@ class PublicProductVerificationView(APIView):
             .select_related('manufacturer', 'manufacturing_record')
             .prefetch_related(
                 'input_batches__herb_batch__laboratory_tests',
+                'input_batches__herb_batch__laboratory_tests__laboratory',
+                'input_batches__herb_batch__laboratory_tests__measurements',
                 'input_batches__herb_batch__transfers',
             )
             .filter(qr_reference=qr_reference)
@@ -213,6 +225,29 @@ class PublicProductVerificationView(APIView):
                 },
                 'laboratory_test_status': latest_test.status if latest_test else None,
                 'certificate_available': bool(latest_test and latest_test.certificate_file),
+                'laboratory_name': (
+                    latest_test.laboratory.laboratory_name if latest_test else None
+                ),
+                'lab_measurements': (
+                    [
+                        {
+                            'analyte': measurement.analyte,
+                            'method': measurement.method,
+                            'result_value': measurement.result_value,
+                            'numeric_value': (
+                                str(measurement.numeric_value)
+                                if measurement.numeric_value is not None
+                                else None
+                            ),
+                            'unit': measurement.unit,
+                            'threshold': measurement.threshold,
+                            'verdict': measurement.verdict,
+                        }
+                        for measurement in latest_test.measurements.all()
+                    ]
+                    if latest_test and latest_test.status == LabTest.Status.APPROVED
+                    else []
+                ),
                 'transfer_history': [
                     {
                         'event_id': str(event.event_id),
@@ -237,12 +272,37 @@ class PublicProductVerificationView(APIView):
         return Response({
             'verification_status': verification_status,
             'product': {
+                'product_id': str(product.product_id),
                 'product_name': product.product_name,
                 'product_type': product.product_type,
                 'manufacture_date': product.manufacture_date,
                 'status': product.status,
                 'manufacturer_name': product.manufacturer.factory_name,
                 'batch_number': product.batch_number,
+                'product_image_url': (
+                    request.build_absolute_uri(
+                        reverse(
+                            'product-asset',
+                            kwargs={
+                                'product_id': product.product_id,
+                                'asset': 'image',
+                            },
+                        )
+                    )
+                    if product.product_image else None
+                ),
+                'qr_code_url': (
+                    request.build_absolute_uri(
+                        reverse(
+                            'product-asset',
+                            kwargs={
+                                'product_id': product.product_id,
+                                'asset': 'qr',
+                            },
+                        )
+                    )
+                    if product.qr_code_image else None
+                ),
             },
             'manufacturing': {
                 'process_date': product.manufacturing_record.process_date,

@@ -330,6 +330,10 @@ PRODUCT_VERIFICATION_BASE_URL = (
     os.getenv('PRODUCT_VERIFICATION_BASE_URL', '').strip()
     or default_product_verification_url
 )
+PRODUCT_VERIFICATION_FRONTEND_URL = os.getenv(
+    'PRODUCT_VERIFICATION_FRONTEND_URL',
+    '',
+).strip()
 
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'

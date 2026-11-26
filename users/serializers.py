@@ -32,7 +32,7 @@ class RegistrationSerializer(serializers.Serializer):
     def validate(self, attrs):
         if 'organization' in self.initial_data:
             raise serializers.ValidationError({
-                'organization': 'Organization membership is assigned through organization onboarding.'
+                'organization': 'Organization membership is not supported.'
             })
         return attrs
 
@@ -81,8 +81,6 @@ class LogoutSerializer(serializers.Serializer):
 
 
 class UserSerializer(serializers.ModelSerializer):
-    organization = serializers.PrimaryKeyRelatedField(read_only=True)
-
     class Meta:
         model = User
         fields = (
@@ -91,9 +89,31 @@ class UserSerializer(serializers.ModelSerializer):
             'name',
             'phone_number',
             'role',
-            'organization',
             'is_active',
             'is_email_verified',
             'date_joined',
         )
         read_only_fields = fields
+
+
+class DetailResponseSerializer(serializers.Serializer):
+    detail = serializers.CharField()
+
+
+class LoginResponseSerializer(serializers.Serializer):
+    user = UserSerializer()
+    tokens = serializers.DictField(child=serializers.CharField())
+
+
+class OnboardingStatusSerializer(serializers.Serializer):
+    role = serializers.ChoiceField(choices=User.Role.choices)
+    email_verified = serializers.BooleanField()
+    role_profile = serializers.DictField(allow_null=True)
+    role_profile_status = serializers.CharField(allow_null=True)
+    business_identity_approved = serializers.BooleanField()
+    next_step = serializers.ChoiceField(choices=(
+        'VERIFY_EMAIL',
+        'CREATE_PROFILE',
+        'WAIT_FOR_APPROVAL',
+        'READY',
+    ))

@@ -74,6 +74,34 @@ class TransferWorkflowTests(TestCase):
         self.batch.refresh_from_db()
         self.assertEqual(self.batch.current_owner, self.collector)
 
+    def test_transfer_workflow_works_without_organization_records(self):
+        self.farmer.organization = None
+        self.farmer.save(update_fields=['organization'])
+        self.collector.organization = None
+        self.collector.save(update_fields=['organization'])
+        self.batch.organization = None
+        self.batch.save(update_fields=['organization'])
+        self.batch.farmer.organization = None
+        self.batch.farmer.save(update_fields=['organization'])
+        self.collector.collector_profile.organization = None
+        self.collector.collector_profile.save(update_fields=['organization'])
+
+        client = APIClient()
+        client.force_authenticate(self.farmer)
+        response = client.post('/api/collectors/transfer/initiate/', {
+            'batch_id': self.batch.batch_id,
+            'to_party': self.collector.pk,
+            'quantity': '10.000',
+            'transfer_location': 'Collector depot',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertNotIn('from_organization', response.data)
+        self.assertNotIn('to_organization', response.data)
+        event = TransferEvent.objects.get(event_id=response.data['event_id'])
+        self.assertIsNone(event.from_organization)
+        self.assertIsNone(event.to_organization)
+
     def test_partial_batch_transfer_is_rejected(self):
         client = APIClient()
         client.force_authenticate(self.farmer)
@@ -134,3 +162,54 @@ class TransferWorkflowTests(TestCase):
             TransferEvent.objects.get(event_id=event_id).status,
             TransferEvent.Status.CANCELLED,
         )
+
+    def test_available_batches_only_contains_batches_owned_by_collector(self):
+        self.batch.current_owner = self.collector
+        self.batch.status = HerbBatch.Status.WITH_COLLECTOR
+        self.batch.save(update_fields=['current_owner', 'status'])
+
+        other_batch = HerbBatch.objects.create(
+            batch_id='ASH-2026-OTHER',
+            herb_name='Brahmi',
+            botanical_name='Bacopa monnieri',
+            quantity=5,
+            unit='kg',
+            available_quantity=5,
+            source_type='CULTIVATED',
+            collection_date='2026-11-19',
+            collection_time='10:30',
+            collection_address='Farm',
+            village='Village',
+            district='District',
+            state='State',
+            farmer=self.batch.farmer,
+            current_owner=self.farmer,
+            organization=self.organization,
+            status=HerbBatch.Status.REGISTERED,
+        )
+
+        client = APIClient()
+        client.force_authenticate(self.collector)
+        response = client.get('/api/collectors/available-batches/')
+
+        self.assertEqual(response.status_code, 200)
+        identifiers = {
+            entry['batch_id'] for entry in response.data['results']
+        }
+        self.assertIn(self.batch.batch_id, identifiers)
+        self.assertNotIn(other_batch.batch_id, identifiers)
+
+    def test_transfer_response_includes_display_safe_batch_and_parties(self):
+        client = APIClient()
+        client.force_authenticate(self.farmer)
+        response = client.post('/api/collectors/transfer/initiate/', {
+            'batch_id': self.batch.batch_id,
+            'to_party': self.collector.pk,
+            'quantity': '10.000',
+            'transfer_location': 'Collector depot',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['batch_identifier'], self.batch.batch_id)
+        self.assertEqual(response.data['from_party_name'], self.farmer.name)
+        self.assertEqual(response.data['to_party_name'], self.collector.name)
